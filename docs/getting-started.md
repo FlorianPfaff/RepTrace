@@ -17,3 +17,17 @@ python -m reptrace.mne_time_decode \
 
 Use `--metadata-csv` when the labels are stored outside the epochs metadata and
 `--group-column` when cross-validation should keep sessions or runs separated.
+
+If the metadata does not yet contain the binary decoding target, derive one from
+a text column:
+
+```bash
+python -m reptrace.metadata \
+  --events-csv data/nod/sub-01_events.csv \
+  --source-column category \
+  --positive-pattern "face|person" \
+  --label-column condition \
+  --positive-label face \
+  --negative-label object \
+  --out data/nod/sub-01_metadata_face_object.csv
+```

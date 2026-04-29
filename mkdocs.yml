@@ -6,11 +6,13 @@ repo_name: FlorianPfaff/RepTrace
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
+  - Benchmarking: benchmarking.md
   - Examples: examples.md
   - API Overview: api-overview.md
   - API Reference:
       - Reference Index: reference/index.md
       - Decoding: reference/decoding.md
+      - Metadata: reference/metadata.md
       - Metrics: reference/metrics.md
 
 theme:

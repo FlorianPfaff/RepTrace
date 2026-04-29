@@ -57,6 +57,19 @@ python -m reptrace.mne_time_decode \
   --out results/nod_sub-01_face_object_grouped.csv
 ```
 
+If the events CSV has a category column but no binary label yet, create one:
+
+```bash
+python -m reptrace.metadata \
+  --events-csv data/nod/sub-01_events.csv \
+  --source-column category \
+  --positive-pattern "face|person" \
+  --label-column condition \
+  --positive-label face \
+  --negative-label object \
+  --out data/nod/sub-01_metadata_face_object.csv
+```
+
 ## Benchmark Plan
 
 The first public benchmark target is NOD-MEG/NOD-EEG because the dataset
@@ -74,6 +87,7 @@ The `docs/` directory contains the project documentation:
 
 - [Getting started](docs/getting-started.md) covers installation and the first
   decoding run.
+- [Benchmarking](docs/benchmarking.md) describes the initial NOD pilot.
 - [API overview](docs/api-overview.md) maps the main public modules.
 - [Examples](examples/README.md) lists executable examples.
 
