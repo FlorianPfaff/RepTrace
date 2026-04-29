@@ -1,0 +1,96 @@
+name: Test workflow
+
+permissions:
+  contents: read
+  checks: write
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - "**"
+
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install documentation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install poetry
+          poetry env use python
+          poetry install --with docs --without dev
+
+      - name: Build documentation
+        run: poetry run mkdocs build --strict
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    permissions:
+      checks: write
+      pull-requests: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install poetry
+          poetry env use python
+          poetry install --with dev
+
+      - name: Run tests
+        run: poetry run python -m pytest --rootdir . -v --strict-config --junitxml=junit_test_results.xml ./tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+
+      - name: Upload test result artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.python-version }}-test-results
+          path: junit_test_results.xml
+
+  publish-results:
+    needs: test
+    runs-on: ubuntu-latest
+    if: always()
+    permissions:
+      checks: write
+      pull-requests: write
+    steps:
+      - name: Download all test result artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: test-results
+
+      - name: Publish test results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        with:
+          files: |
+            test-results/*/junit_test_results.xml

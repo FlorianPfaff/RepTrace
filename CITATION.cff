@@ -1,0 +1,32 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "RepTrace: Probabilistic Tracing of Neural Representations over Time"
+type: software
+authors:
+  - family-names: "Pfaff"
+    given-names: "Florian"
+    affiliation: "Institute of Industrial Automation and Software Engineering (IAS), University of Stuttgart"
+    email: "pfaff@ias.uni-stuttgart.de"
+repository-code: "https://github.com/FlorianPfaff/RepTrace"
+license: "MIT"
+abstract: >
+  RepTrace is an early-stage Python toolkit for benchmarking calibrated,
+  time-resolved decoders on M/EEG data. It turns classifier outputs from
+  non-invasive neural recordings into probability traces that are useful for
+  studying representational dynamics, planning, and replay-like sequences.
+keywords:
+  - neural decoding
+  - EEG
+  - MEG
+  - representational dynamics
+  - calibration
+  - Python
+preferred-citation:
+  type: software
+  title: "RepTrace: Probabilistic Tracing of Neural Representations over Time"
+  authors:
+    - family-names: "Pfaff"
+      given-names: "Florian"
+  year: 2026
+  url: "https://github.com/FlorianPfaff/RepTrace"
+  license: "MIT"

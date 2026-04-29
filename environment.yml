@@ -1,0 +1,13 @@
+name: reptrace
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.11,<3.14
+  - joblib
+  - matplotlib
+  - mne
+  - numpy
+  - pandas
+  - scikit-learn
+  - pytest
+  - pip

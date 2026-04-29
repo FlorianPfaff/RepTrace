@@ -1,0 +1,32 @@
+site_name: RepTrace
+site_description: Probabilistic tracing of neural representations over time.
+repo_url: https://github.com/FlorianPfaff/RepTrace
+repo_name: FlorianPfaff/RepTrace
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Examples: examples.md
+  - API Overview: api-overview.md
+  - API Reference:
+      - Reference Index: reference/index.md
+      - Decoding: reference/decoding.md
+      - Metrics: reference/metrics.md
+
+theme:
+  name: mkdocs
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths:
+            - src
+          options:
+            docstring_style: sphinx
+            show_if_no_docstring: true
+            show_source: false
+            members_order: source
+
+strict: true

@@ -1,0 +1,61 @@
+[tool.poetry]
+name = "reptrace"
+description = "Probabilistic tracing of neural representations over time."
+readme = "README.md"
+authors = ["Florian Pfaff <pfaff@ias.uni-stuttgart.de>"]
+version = "0.1.0"
+license = "MIT"
+packages = [{ include = "reptrace", from = "src" }]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.dependencies]
+python = ">=3.11,<3.14"
+joblib = "*"
+matplotlib = "*"
+mne = "*"
+numpy = "*"
+pandas = "*"
+scikit-learn = "*"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "*"
+ruff = "*"
+
+[tool.poetry.group.docs.dependencies]
+mkdocs = "^1.6.1"
+mkdocstrings = { version = "^1.0.4", extras = ["python"] }
+
+[tool.mypy]
+check_untyped_defs = true
+
+[tool.ruff]
+line-length = 180
+
+[tool.isort]
+profile = "black"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.pylint.MAIN]
+py-version = "3.13"
+fail-under = 10
+ignore = ["CVS"]
+
+[tool.pylint."MESSAGES CONTROL"]
+disable = [
+  "raw-checker-failed",
+  "bad-inline-option",
+  "locally-disabled",
+  "file-ignored",
+  "suppressed-message",
+  "deprecated-pragma",
+  "use-symbolic-message-instead",
+  "C",
+]
+
+[tool.pylint.FORMAT]
+max-line-length = 180

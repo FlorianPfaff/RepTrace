@@ -1,0 +1,44 @@
+# Ignore files by codex
+.codex_*
+_reference_pyrecest/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# Unit test / coverage reports
+.coverage
+.coverage.*
+.pytest_cache/
+htmlcov/
+coverage.xml
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Documentation
+site/
+docs/_build/
+
+# IDEs
+.idea/
+.vscode/settings.json
+
+# Data and benchmark outputs
+data/
+results/
+*.fif
+*.h5
+*.hdf5
