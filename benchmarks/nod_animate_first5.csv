@@ -1,0 +1,6 @@
+subject,epochs,events_csv,source_column,positive_pattern,label_column,positive_label,negative_label,group_column,tmin,tmax,window_ms,step_ms,n_splits
+sub-01,../data/nod/sub-01_epo.fif,../data/nod/sub-01_events.csv,stim_is_animate,True,condition,animate,inanimate,session,-0.1,0.8,20,10,4
+sub-02,../data/nod/sub-02_epo.fif,../data/nod/sub-02_events.csv,stim_is_animate,True,condition,animate,inanimate,session,-0.1,0.8,20,10,4
+sub-03,../data/nod/sub-03_epo.fif,../data/nod/sub-03_events.csv,stim_is_animate,True,condition,animate,inanimate,session,-0.1,0.8,20,10,4
+sub-04,../data/nod/sub-04_epo.fif,../data/nod/sub-04_events.csv,stim_is_animate,True,condition,animate,inanimate,session,-0.1,0.8,20,10,4
+sub-05,../data/nod/sub-05_epo.fif,../data/nod/sub-05_events.csv,stim_is_animate,True,condition,animate,inanimate,session,-0.1,0.8,20,10,4

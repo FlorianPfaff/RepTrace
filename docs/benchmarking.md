@@ -89,6 +89,27 @@ python -m reptrace.benchmark \
 Manifest paths are resolved relative to the manifest file. The example manifest
 expects staged files under `data/nod/`.
 
+## Five-Subject Pilot
+
+For a paper-ready first pass, use the same animate/inanimate task and run five
+subjects at once from a single manifest:
+
+```bash
+python -m reptrace.validate_manifest \
+  benchmarks/nod_animate_first5.csv \
+  --report-out results/nod_animate_first5_validation.csv
+
+python -m reptrace.benchmark \
+  benchmarks/nod_animate_first5.csv \
+  --out-dir results/nod_animate_first5 \
+  --aggregate-out results/nod_animate_first5_summary.csv \
+  --plot-out results/nod_animate_first5_summary.png \
+  --chance 0.5
+```
+
+This keeps the experiment scope fixed (same preprocessing, same target labels,
+same window/grid parameters) and changes only the subject set.
+
 ## Acceptance Target
 
 The first useful milestone is not just above-chance accuracy. The benchmark

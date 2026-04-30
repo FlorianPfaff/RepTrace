@@ -69,6 +69,47 @@ Copy-Item data\openneuro_ds005811_sub01\derivatives\detailed_events\sub-01_event
 The expected staged file sizes for the sub-01 pilot are about 215 MB for the
 epoch file and less than 1 MB for the events CSV.
 
+For a 5-subject pilot, the same commands can be repeated in a loop:
+
+```bash
+for sid in 01 02 03 04 05; do
+  openneuro-py download \
+    --dataset=ds005811 \
+    --target-dir="data/openneuro_ds005811_sub${sid}" \
+    --include="derivatives/preprocessed/epochs/sub-${sid}_eeg_epo.fif" \
+    --include="derivatives/detailed_events/sub-${sid}_events.csv" \
+    --max-concurrent-downloads=2 \
+    --metadata-timeout=60
+
+  mkdir -p data/nod
+  cp "data/openneuro_ds005811_sub${sid}/derivatives/preprocessed/epochs/sub-${sid}_eeg_epo.fif" \
+    "data/nod/sub-${sid}_epo.fif"
+  cp "data/openneuro_ds005811_sub${sid}/derivatives/detailed_events/sub-${sid}_events.csv" \
+    "data/nod/sub-${sid}_events.csv"
+done
+```
+
+PowerShell equivalent:
+
+```powershell
+foreach ($sid in 1..5) {
+  $s = "{0:D2}" -f $sid
+  & openneuro-py download `
+    --dataset=ds005811 `
+    --target-dir="data/openneuro_ds005811_sub$s" `
+    --include="derivatives/preprocessed/epochs/sub-$s`_eeg_epo.fif" `
+    --include="derivatives/detailed_events/sub-$s`_events.csv" `
+    --max-concurrent-downloads=2 `
+    --metadata-timeout=60
+
+  New-Item -ItemType Directory -Force -Path data\nod | Out-Null
+  Copy-Item "data\openneuro_ds005811_sub$s\derivatives\preprocessed\epochs\sub-$s`_eeg_epo.fif" `
+    "data\nod\sub-$s`_epo.fif"
+  Copy-Item "data\openneuro_ds005811_sub$s\derivatives\detailed_events\sub-$s`_events.csv" `
+    "data\nod\sub-$s`_events.csv"
+}
+```
+
 ## Alternative Download Methods
 
 OpenNeuro's browser download, the Deno OpenNeuro CLI, or DataLad/git-annex can
@@ -86,6 +127,14 @@ Example target layout:
 ```text
 data/nod/sub-01_epo.fif
 data/nod/sub-01_events.csv
+data/nod/sub-02_epo.fif
+data/nod/sub-02_events.csv
+data/nod/sub-03_epo.fif
+data/nod/sub-03_events.csv
+data/nod/sub-04_epo.fif
+data/nod/sub-04_events.csv
+data/nod/sub-05_epo.fif
+data/nod/sub-05_events.csv
 ```
 
 Then update `benchmarks/nod_animate_sub01.csv` if the staged filenames differ.
