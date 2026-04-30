@@ -4,22 +4,21 @@ The first intended public benchmark is NOD-MEG/NOD-EEG. RepTrace does not
 download large public datasets automatically; stage the relevant subject epochs
 and metadata locally first.
 
-## NOD Face/Object Pilot
+## NOD Animate/Inanimate Pilot
 
 Use the NOD preprocessed epochs file and the matching detailed events CSV. If
-the metadata already contains a binary face/object label, pass it directly to
-`reptrace.mne_time_decode`. If it contains a text category column instead,
-derive a binary label first:
+the metadata already contains `stim_is_animate`, pass it directly to
+`reptrace.mne_time_decode` or derive a named condition column first:
 
 ```bash
 python -m reptrace.metadata \
   --events-csv data/nod/sub-01_events.csv \
-  --source-column category \
-  --positive-pattern "face|person" \
+  --source-column stim_is_animate \
+  --positive-pattern "True" \
   --label-column condition \
-  --positive-label face \
-  --negative-label object \
-  --out data/nod/sub-01_metadata_face_object.csv
+  --positive-label animate \
+  --negative-label inanimate \
+  --out data/nod/sub-01_metadata_animate.csv
 ```
 
 Then run the decoder:
@@ -27,14 +26,14 @@ Then run the decoder:
 ```bash
 python -m reptrace.mne_time_decode \
   --epochs data/nod/sub-01_epo.fif \
-  --metadata-csv data/nod/sub-01_metadata_face_object.csv \
+  --metadata-csv data/nod/sub-01_metadata_animate.csv \
   --label-column condition \
-  --group-column run \
+  --group-column session \
   --tmin -0.1 \
   --tmax 0.8 \
   --window-ms 20 \
   --step-ms 10 \
-  --out results/nod_sub-01_face_object.csv
+  --out results/nod_sub-01_animate.csv
 ```
 
 The output CSV contains fold-wise accuracy, log loss, Brier score, and expected
@@ -44,30 +43,30 @@ Plot the single-subject result:
 
 ```bash
 python -m reptrace.plot_time_decode \
-  results/nod_sub-01_face_object.csv \
+  results/nod_sub-01_animate.csv \
   --chance 0.5 \
-  --title "NOD sub-01 face/object" \
-  --out results/nod_sub-01_face_object.png
+  --title "NOD sub-01 animate/inanimate" \
+  --out results/nod_sub-01_animate.png
 ```
 
 After running several subjects, aggregate across subjects:
 
 ```bash
 python -m reptrace.results \
-  results/nod_sub-01_face_object.csv \
-  results/nod_sub-02_face_object.csv \
-  results/nod_sub-03_face_object.csv \
-  --out results/nod_face_object_summary.csv
+  results/nod_sub-01_animate.csv \
+  results/nod_sub-02_animate.csv \
+  results/nod_sub-03_animate.csv \
+  --out results/nod_animate_summary.csv
 ```
 
 Then plot the aggregate:
 
 ```bash
 python -m reptrace.plot_time_decode \
-  results/nod_face_object_summary.csv \
+  results/nod_animate_summary.csv \
   --chance 0.5 \
-  --title "NOD face/object summary" \
-  --out results/nod_face_object_summary.png
+  --title "NOD animate/inanimate summary" \
+  --out results/nod_animate_summary.png
 ```
 
 ## Manifest Runner
@@ -76,14 +75,14 @@ The same workflow can be run from a manifest:
 
 ```bash
 python -m reptrace.validate_manifest \
-  benchmarks/nod_face_object.csv \
-  --report-out results/nod_manifest_validation.csv
+  benchmarks/nod_animate_sub01.csv \
+  --report-out results/nod_animate_sub01_validation.csv
 
 python -m reptrace.benchmark \
-  benchmarks/nod_face_object.csv \
-  --out-dir results/nod \
-  --aggregate-out results/nod_face_object_summary.csv \
-  --plot-out results/nod_face_object_summary.png \
+  benchmarks/nod_animate_sub01.csv \
+  --out-dir results/nod_animate_sub01 \
+  --aggregate-out results/nod_animate_sub01_summary.csv \
+  --plot-out results/nod_animate_sub01_summary.png \
   --chance 0.5
 ```
 

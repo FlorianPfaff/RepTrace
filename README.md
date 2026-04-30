@@ -36,79 +36,72 @@ python -m pip install -e .
 
 ## Quickstart
 
-Run time-resolved decoding on an MNE epochs file with metadata:
+Run the pilot NOD-EEG benchmark from a manifest:
+
+```bash
+python -m reptrace.validate_manifest \
+  benchmarks/nod_animate_sub01.csv \
+  --report-out results/nod_animate_sub01_validation.csv
+
+python -m reptrace.benchmark \
+  benchmarks/nod_animate_sub01.csv \
+  --out-dir results/nod_animate_sub01 \
+  --aggregate-out results/nod_animate_sub01_summary.csv \
+  --plot-out results/nod_animate_sub01_summary.png \
+  --chance 0.5
+```
+
+Run time-resolved decoding directly on an MNE epochs file with metadata:
 
 ```bash
 python -m reptrace.mne_time_decode \
   --epochs path/to/sub-01_epo.fif \
-  --label-column is_face \
-  --out results/nod_sub-01_face_object.csv
+  --metadata-csv path/to/sub-01_events.csv \
+  --label-column stim_is_animate \
+  --group-column session \
+  --out results/nod_sub-01_animate.csv
 ```
 
 Plot the resulting time course:
 
 ```bash
 python -m reptrace.plot_time_decode \
-  results/nod_sub-01_face_object.csv \
+  results/nod_sub-01_animate.csv \
   --chance 0.5 \
-  --out results/nod_sub-01_face_object.png
+  --out results/nod_sub-01_animate.png
 ```
 
-If labels are stored separately from the epochs metadata, pass a CSV with one
-row per epoch:
-
-```bash
-python -m reptrace.mne_time_decode \
-  --epochs path/to/sub-01_epo.fif \
-  --metadata-csv path/to/sub-01_metadata.csv \
-  --label-column is_face \
-  --group-column run \
-  --out results/nod_sub-01_face_object_grouped.csv
-```
-
-If the events CSV has a category column but no binary label yet, create one:
+If the events CSV has the NOD `stim_is_animate` column but no named decoding
+condition yet, create one:
 
 ```bash
 python -m reptrace.metadata \
   --events-csv data/nod/sub-01_events.csv \
-  --source-column category \
-  --positive-pattern "face|person" \
+  --source-column stim_is_animate \
+  --positive-pattern "True" \
   --label-column condition \
-  --positive-label face \
-  --negative-label object \
-  --out data/nod/sub-01_metadata_face_object.csv
+  --positive-label animate \
+  --negative-label inanimate \
+  --out data/nod/sub-01_metadata_animate.csv
 ```
 
 After running several subjects, aggregate them:
 
 ```bash
 python -m reptrace.results \
-  results/nod_sub-01_face_object.csv \
-  results/nod_sub-02_face_object.csv \
-  --out results/nod_face_object_summary.csv
-```
-
-For reproducible multi-subject runs, use a benchmark manifest:
-
-```bash
-python -m reptrace.validate_manifest \
-  benchmarks/nod_face_object.csv \
-  --report-out results/nod_manifest_validation.csv
-
-python -m reptrace.benchmark \
-  benchmarks/nod_face_object.csv \
-  --out-dir results/nod \
-  --aggregate-out results/nod_face_object_summary.csv \
-  --plot-out results/nod_face_object_summary.png \
-  --chance 0.5
+  results/nod_sub-01_animate.csv \
+  results/nod_sub-02_animate.csv \
+  --out results/nod_animate_summary.csv
 ```
 
 ## Benchmark Plan
 
 The first public benchmark target is NOD-MEG/NOD-EEG because the dataset
-provides preprocessed MNE epochs and metadata for natural-object decoding. The
-recommended first task is face-versus-object decoding, followed by multi-class
-ImageNet or semantic-superclass decoding where metadata supports it.
+provides preprocessed MNE epochs and metadata for natural-image decoding. The
+recommended first task is animate-versus-inanimate decoding from the NOD-EEG
+`stim_is_animate` metadata. Face/object labels are too sparse in the initial
+sub-01 detailed events slice to make a useful first pilot, but richer semantic
+tasks can be added once the public baseline is reproducible.
 
 THINGS-EEG and THINGS-MEG are natural follow-up benchmarks for larger visual
 object representation experiments. Lab data with task localizers and planning

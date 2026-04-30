@@ -19,8 +19,9 @@ For each subject, RepTrace expects:
 - a manifest row pointing to both files.
 
 The NOD records document detailed trial information under
-`derivatives/detailed_events/sub-subID_events.csv`. The epoch data are stored in
-the preprocessed epochs derivative area and named `sub-subID_epo.fif`.
+`derivatives/detailed_events/sub-subID_events.csv`. In NOD-EEG, epoch data are
+stored in the preprocessed epochs derivative area and named like
+`sub-01_eeg_epo.fif`; stage them under the simpler local filenames shown below.
 
 ## Manual Download
 
@@ -35,7 +36,7 @@ data/nod/sub-01_epo.fif
 data/nod/sub-01_events.csv
 ```
 
-Then update `benchmarks/nod_face_object.csv` if the staged filenames differ.
+Then update `benchmarks/nod_animate_sub01.csv` if the staged filenames differ.
 
 ## Validate Before Decoding
 
@@ -43,17 +44,17 @@ Run:
 
 ```bash
 python -m reptrace.validate_manifest \
-  benchmarks/nod_face_object.csv \
-  --report-out results/nod_manifest_validation.csv
+  benchmarks/nod_animate_sub01.csv \
+  --report-out results/nod_animate_sub01_validation.csv
 ```
 
 Only run the benchmark after validation passes:
 
 ```bash
 python -m reptrace.benchmark \
-  benchmarks/nod_face_object.csv \
-  --out-dir results/nod \
-  --aggregate-out results/nod_face_object_summary.csv \
-  --plot-out results/nod_face_object_summary.png \
+  benchmarks/nod_animate_sub01.csv \
+  --out-dir results/nod_animate_sub01 \
+  --aggregate-out results/nod_animate_sub01_summary.csv \
+  --plot-out results/nod_animate_sub01_summary.png \
   --chance 0.5
 ```
