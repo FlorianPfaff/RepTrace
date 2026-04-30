@@ -70,6 +70,22 @@ python -m reptrace.plot_time_decode \
   --out results/nod_face_object_summary.png
 ```
 
+## Manifest Runner
+
+The same workflow can be run from a manifest:
+
+```bash
+python -m reptrace.benchmark \
+  benchmarks/nod_face_object.csv \
+  --out-dir results/nod \
+  --aggregate-out results/nod_face_object_summary.csv \
+  --plot-out results/nod_face_object_summary.png \
+  --chance 0.5
+```
+
+Manifest paths are resolved relative to the manifest file. The example manifest
+expects staged files under `data/nod/`.
+
 ## Acceptance Target
 
 The first useful milestone is not just above-chance accuracy. The benchmark

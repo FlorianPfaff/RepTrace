@@ -45,5 +45,16 @@ python -m reptrace.results \
   --out results/nod_face_object_summary.csv
 ```
 
+Or run the manifest:
+
+```bash
+python -m reptrace.benchmark \
+  benchmarks/nod_face_object.csv \
+  --out-dir results/nod \
+  --aggregate-out results/nod_face_object_summary.csv \
+  --plot-out results/nod_face_object_summary.png \
+  --chance 0.5
+```
+
 Adjust `--source-column` and `--positive-pattern` to match the actual event
 metadata columns available in the staged NOD files.

@@ -88,6 +88,17 @@ python -m reptrace.results \
   --out results/nod_face_object_summary.csv
 ```
 
+For reproducible multi-subject runs, use a benchmark manifest:
+
+```bash
+python -m reptrace.benchmark \
+  benchmarks/nod_face_object.csv \
+  --out-dir results/nod \
+  --aggregate-out results/nod_face_object_summary.csv \
+  --plot-out results/nod_face_object_summary.png \
+  --chance 0.5
+```
+
 ## Benchmark Plan
 
 The first public benchmark target is NOD-MEG/NOD-EEG because the dataset

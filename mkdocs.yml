@@ -11,6 +11,7 @@ nav:
   - API Overview: api-overview.md
   - API Reference:
       - Reference Index: reference/index.md
+      - Benchmark: reference/benchmark.md
       - Decoding: reference/decoding.md
       - Metadata: reference/metadata.md
       - Metrics: reference/metrics.md

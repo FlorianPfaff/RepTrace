@@ -1,0 +1,3 @@
+# Benchmark
+
+::: reptrace.benchmark
