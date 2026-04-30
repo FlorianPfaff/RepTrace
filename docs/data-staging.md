@@ -1,8 +1,12 @@
 # Data Staging
 
-RepTrace does not download large public datasets automatically. Stage datasets
-outside version control under `data/`, then validate the benchmark manifest
-before running decoding.
+RepTrace does not download large public datasets automatically and does not
+store staged data in git. Stage datasets outside version control under
+`data/`, then validate the benchmark manifest before running decoding.
+
+The repository tracks only code, documentation, and lightweight benchmark
+manifests. `.gitignore` excludes `data/`, `results/`, and large local data
+formats such as `*.fif`, `*.h5`, and `*.hdf5`.
 
 ## NOD-EEG and NOD-MEG
 
@@ -23,11 +27,59 @@ The NOD records document detailed trial information under
 stored in the preprocessed epochs derivative area and named like
 `sub-01_eeg_epo.fif`; stage them under the simpler local filenames shown below.
 
-## Manual Download
+## Recommended Pilot Download
 
-Use OpenNeuro's browser download, OpenNeuro CLI, or DataLad/git-annex. For a
-small first pilot, download only one subject's epoch file and detailed events
-file.
+For a small first pilot, download only one subject's epoch file and detailed
+events file from OpenNeuro `ds005811`. The `openneuro-py` client supports
+include filters, which avoids downloading the full dataset snapshot:
+
+```bash
+python -m pip install openneuro-py
+
+openneuro-py download \
+  --dataset=ds005811 \
+  --target-dir=data/openneuro_ds005811_sub01 \
+  --include="derivatives/preprocessed/epochs/sub-01_eeg_epo.fif" \
+  --include="derivatives/detailed_events/sub-01_events.csv" \
+  --max-concurrent-downloads=2 \
+  --metadata-timeout=60
+```
+
+Then stage the files under the local layout expected by
+`benchmarks/nod_animate_sub01.csv`:
+
+```bash
+mkdir -p data/nod
+cp data/openneuro_ds005811_sub01/derivatives/preprocessed/epochs/sub-01_eeg_epo.fif \
+  data/nod/sub-01_epo.fif
+cp data/openneuro_ds005811_sub01/derivatives/detailed_events/sub-01_events.csv \
+  data/nod/sub-01_events.csv
+```
+
+On Windows PowerShell, the staging commands are:
+
+```powershell
+New-Item -ItemType Directory -Force -Path data\nod
+Copy-Item data\openneuro_ds005811_sub01\derivatives\preprocessed\epochs\sub-01_eeg_epo.fif `
+  data\nod\sub-01_epo.fif
+Copy-Item data\openneuro_ds005811_sub01\derivatives\detailed_events\sub-01_events.csv `
+  data\nod\sub-01_events.csv
+```
+
+The expected staged file sizes for the sub-01 pilot are about 215 MB for the
+epoch file and less than 1 MB for the events CSV.
+
+## Alternative Download Methods
+
+OpenNeuro's browser download, the Deno OpenNeuro CLI, or DataLad/git-annex can
+also be used. The Deno CLI command downloads a dataset snapshot:
+
+```bash
+deno run -A jsr:@openneuro/cli download ds005811 data/openneuro_ds005811
+```
+
+After a full download, copy the same two files from the snapshot into
+`data/nod/`.
 
 Example target layout:
 
