@@ -91,6 +91,10 @@ python -m reptrace.results \
 For reproducible multi-subject runs, use a benchmark manifest:
 
 ```bash
+python -m reptrace.validate_manifest \
+  benchmarks/nod_face_object.csv \
+  --report-out results/nod_manifest_validation.csv
+
 python -m reptrace.benchmark \
   benchmarks/nod_face_object.csv \
   --out-dir results/nod \
@@ -116,6 +120,8 @@ The `docs/` directory contains the project documentation:
 
 - [Getting started](docs/getting-started.md) covers installation and the first
   decoding run.
+- [Data staging](docs/data-staging.md) describes the public NOD files to place
+  under `data/`.
 - [Benchmarking](docs/benchmarking.md) describes the initial NOD pilot.
 - [API overview](docs/api-overview.md) maps the main public modules.
 - [Examples](examples/README.md) lists executable examples.

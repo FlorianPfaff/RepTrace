@@ -48,6 +48,10 @@ python -m reptrace.results \
 Or run the manifest:
 
 ```bash
+python -m reptrace.validate_manifest \
+  benchmarks/nod_face_object.csv \
+  --report-out results/nod_manifest_validation.csv
+
 python -m reptrace.benchmark \
   benchmarks/nod_face_object.csv \
   --out-dir results/nod \

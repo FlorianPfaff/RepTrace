@@ -75,6 +75,10 @@ python -m reptrace.plot_time_decode \
 The same workflow can be run from a manifest:
 
 ```bash
+python -m reptrace.validate_manifest \
+  benchmarks/nod_face_object.csv \
+  --report-out results/nod_manifest_validation.csv
+
 python -m reptrace.benchmark \
   benchmarks/nod_face_object.csv \
   --out-dir results/nod \

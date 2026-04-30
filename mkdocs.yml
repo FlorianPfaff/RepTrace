@@ -6,6 +6,7 @@ repo_name: FlorianPfaff/RepTrace
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
+  - Data Staging: data-staging.md
   - Benchmarking: benchmarking.md
   - Examples: examples.md
   - API Overview: api-overview.md
@@ -17,6 +18,7 @@ nav:
       - Metrics: reference/metrics.md
       - Results: reference/results.md
       - Plotting: reference/plotting.md
+      - Validation: reference/validation.md
 
 theme:
   name: mkdocs

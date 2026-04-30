@@ -12,3 +12,9 @@ Required columns:
 Use either `metadata_csv` for pre-labeled metadata or `events_csv`,
 `source_column`, and `positive_pattern` to derive a binary label before
 decoding.
+
+Validate staged files before decoding:
+
+```bash
+python -m reptrace.validate_manifest benchmarks/nod_face_object.csv
+```
