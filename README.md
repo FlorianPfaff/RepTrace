@@ -16,7 +16,7 @@ RepTrace currently provides tools for:
 - calibrated classification metrics, including Brier score and expected
   calibration error;
 - grouped cross-validation for session- or run-aware benchmarks; and
-- simple CSV outputs for downstream plotting and sequence modelling.
+- CSV aggregation and plotting for downstream interpretation.
 
 ## Installation
 
@@ -45,6 +45,15 @@ python -m reptrace.mne_time_decode \
   --out results/nod_sub-01_face_object.csv
 ```
 
+Plot the resulting time course:
+
+```bash
+python -m reptrace.plot_time_decode \
+  results/nod_sub-01_face_object.csv \
+  --chance 0.5 \
+  --out results/nod_sub-01_face_object.png
+```
+
 If labels are stored separately from the epochs metadata, pass a CSV with one
 row per epoch:
 
@@ -68,6 +77,15 @@ python -m reptrace.metadata \
   --positive-label face \
   --negative-label object \
   --out data/nod/sub-01_metadata_face_object.csv
+```
+
+After running several subjects, aggregate them:
+
+```bash
+python -m reptrace.results \
+  results/nod_sub-01_face_object.csv \
+  results/nod_sub-02_face_object.csv \
+  --out results/nod_face_object_summary.csv
 ```
 
 ## Benchmark Plan

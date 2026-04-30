@@ -27,5 +27,23 @@ python -m reptrace.mne_time_decode \
   --out results/nod_sub-01_face_object.csv
 ```
 
+Plot a subject:
+
+```bash
+python -m reptrace.plot_time_decode \
+  results/nod_sub-01_face_object.csv \
+  --chance 0.5 \
+  --out results/nod_sub-01_face_object.png
+```
+
+Aggregate multiple subjects:
+
+```bash
+python -m reptrace.results \
+  results/nod_sub-01_face_object.csv \
+  results/nod_sub-02_face_object.csv \
+  --out results/nod_face_object_summary.csv
+```
+
 Adjust `--source-column` and `--positive-pattern` to match the actual event
 metadata columns available in the staged NOD files.

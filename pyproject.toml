@@ -39,6 +39,7 @@ profile = "black"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--basetemp=.pytest-tmp"
 
 [tool.pylint.MAIN]
 py-version = "3.13"

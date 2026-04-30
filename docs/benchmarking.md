@@ -40,6 +40,36 @@ python -m reptrace.mne_time_decode \
 The output CSV contains fold-wise accuracy, log loss, Brier score, and expected
 calibration error for each time window.
 
+Plot the single-subject result:
+
+```bash
+python -m reptrace.plot_time_decode \
+  results/nod_sub-01_face_object.csv \
+  --chance 0.5 \
+  --title "NOD sub-01 face/object" \
+  --out results/nod_sub-01_face_object.png
+```
+
+After running several subjects, aggregate across subjects:
+
+```bash
+python -m reptrace.results \
+  results/nod_sub-01_face_object.csv \
+  results/nod_sub-02_face_object.csv \
+  results/nod_sub-03_face_object.csv \
+  --out results/nod_face_object_summary.csv
+```
+
+Then plot the aggregate:
+
+```bash
+python -m reptrace.plot_time_decode \
+  results/nod_face_object_summary.csv \
+  --chance 0.5 \
+  --title "NOD face/object summary" \
+  --out results/nod_face_object_summary.png
+```
+
 ## Acceptance Target
 
 The first useful milestone is not just above-chance accuracy. The benchmark

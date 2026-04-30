@@ -14,6 +14,8 @@ nav:
       - Decoding: reference/decoding.md
       - Metadata: reference/metadata.md
       - Metrics: reference/metrics.md
+      - Results: reference/results.md
+      - Plotting: reference/plotting.md
 
 theme:
   name: mkdocs
