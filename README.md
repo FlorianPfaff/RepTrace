@@ -15,6 +15,8 @@ RepTrace currently provides tools for:
 - time-resolved decoding from MNE `Epochs` files;
 - held-out trial/time probability observation exports for downstream state
   models;
+- conservative sticky switching models for probability traces with shuffled
+  time, shuffled label, and baseline-window controls;
 - calibrated classification metrics, including Brier score and expected
   calibration error;
 - calibration-first reports and reliability-bin diagnostics;

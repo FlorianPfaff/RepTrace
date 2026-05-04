@@ -48,6 +48,26 @@ predicted class, confidence, probability assigned to the true class, and one
 traces as probabilistic evidence streams for HMMs or other temporal state
 models.
 
+Fit the first conservative temporal model from those observations:
+
+```bash
+python -m reptrace.temporal_model \
+  results/nod_sub-01_animate_observations.csv \
+  --out-summary results/nod_sub-01_animate_temporal_model.csv \
+  --out-states results/nod_sub-01_animate_state_trace.csv \
+  --effect-window 0.1 0.8 \
+  --baseline-window -0.1 0.0 \
+  --n-permutations 100
+```
+
+This command treats each trial as a probability time series. The hidden states
+are the decoder classes, and the fitted parameter is the probability that the
+latent state persists between adjacent time bins. The summary reports
+persistence gain relative to a uniform-memory baseline, plus controls that
+shuffle time order, shuffle probability-label columns, and fit the same model in
+the pre-stimulus baseline window. The optional state trace CSV contains Viterbi
+states and posterior state probabilities for downstream sequence analyses.
+
 Plot the single-subject result:
 
 ```bash
@@ -402,3 +422,14 @@ When `--observation-dir` is requested, resume mode also requires the matching
 subject observation CSV before skipping a manifest row. This prevents a run from
 appearing complete when metric summaries exist but the probability traces needed
 for downstream state modeling are missing.
+
+After a manifest run with `--observation-dir`, fit the same temporal model across
+all exported subject observations:
+
+```bash
+python -m reptrace.temporal_model \
+  "results/nod_animate_all/observations/*_observations.csv" \
+  --out-summary results/nod_animate_all/temporal_model.csv \
+  --out-states results/nod_animate_all/state_trace.csv \
+  --n-permutations 100
+```

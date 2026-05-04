@@ -10,6 +10,8 @@ RepTrace currently exposes these small modules:
 - `reptrace.decoding` provides cross-validation and baseline decoder helpers.
 - `reptrace.metadata` provides simple metadata labeling helpers.
 - `reptrace.results` aggregates fold- and subject-level result CSV files.
+- `reptrace.temporal_model` fits conservative sticky switching models to
+  held-out probability observations.
 - `reptrace.plot_time_decode` plots raw or aggregated time-resolved metrics.
 - `reptrace.plot_calibration` plots calibration reliability diagrams.
 - `reptrace.paired_stats` runs paired subject-level decoder comparisons.
