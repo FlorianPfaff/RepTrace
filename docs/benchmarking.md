@@ -307,7 +307,9 @@ paper-safe artifacts into the paper repository:
 python scripts/export_paper_results.py \
   results/nod_animate_decoders_all \
   ../2026-05-RepTrace-Paper/results/nod_animate_decoders_all \
-  --max-mb 50
+  --max-mb 50 \
+  --plot-reliability \
+  --reliability-window 0.1 0.8
 ```
 
 ## Acceptance Target
