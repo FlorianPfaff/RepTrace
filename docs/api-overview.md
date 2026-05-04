@@ -3,6 +3,8 @@
 RepTrace currently exposes these small modules:
 
 - `reptrace.benchmark` runs manifest-defined multi-subject benchmarks.
+- `reptrace.calibration` creates calibration-first summaries and reliability
+  bin aggregates.
 - `reptrace.inference` runs subject-level sign-flip and cluster inference.
 - `reptrace.metrics` provides calibration and probabilistic scoring metrics.
 - `reptrace.decoding` provides cross-validation and baseline decoder helpers.

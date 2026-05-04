@@ -21,6 +21,7 @@ class BenchmarkRun:
     result_csvs: list[Path]
     aggregate_csv: Path | None
     plot_path: Path | None
+    calibration_csvs: list[Path]
 
 
 def _missing(value: Any) -> bool:
@@ -73,6 +74,10 @@ def _safe_name(value: str) -> str:
     return value.lower().replace("-", "_").replace(" ", "_")
 
 
+def _decoder_output_stem(subject: str, decoder: str, has_decoder_column: bool) -> str:
+    return f"{subject}_{_safe_name(decoder)}" if has_decoder_column else subject
+
+
 def _prepare_or_resolve_metadata(row: pd.Series, manifest_dir: Path, out_dir: Path, subject: str) -> Path | None:
     events_csv = _resolve_path(_string_value(row, "events_csv"), manifest_dir)
     metadata_csv = _resolve_path(_string_value(row, "metadata_csv"), manifest_dir)
@@ -121,6 +126,8 @@ def run_benchmark_manifest(
     default_n_splits: int = 5,
     default_max_iter: int = 1000,
     default_decoder: str = "logistic",
+    calibration_dir: Path | None = None,
+    calibration_bins: int = 10,
 ) -> BenchmarkRun:
     """Run a manifest-defined benchmark and optionally aggregate and plot results."""
     manifest = pd.read_csv(manifest_csv)
@@ -130,6 +137,7 @@ def run_benchmark_manifest(
     manifest_dir = manifest_csv.parent
     out_dir.mkdir(parents=True, exist_ok=True)
     result_csvs: list[Path] = []
+    calibration_csvs: list[Path] = []
 
     for _, row in manifest.iterrows():
         subject = _string_value(row, "subject")
@@ -143,8 +151,11 @@ def run_benchmark_manifest(
 
         output_csv = _resolve_path(_string_value(row, "out_csv"), manifest_dir)
         if output_csv is None:
-            output_stem = f"{subject}_{_safe_name(decoder)}_time_decode" if "decoder" in manifest.columns else f"{subject}_time_decode"
+            output_stem = f"{_decoder_output_stem(subject, decoder, 'decoder' in manifest.columns)}_time_decode"
             output_csv = out_dir / f"{output_stem}.csv"
+        calibration_out_csv = _resolve_path(_string_value(row, "calibration_out_csv"), manifest_dir)
+        if calibration_out_csv is None and calibration_dir is not None:
+            calibration_out_csv = calibration_dir / f"{_decoder_output_stem(subject, decoder, 'decoder' in manifest.columns)}_calibration_bins.csv"
 
         metadata_csv = _prepare_or_resolve_metadata(row, manifest_dir, out_dir, subject)
         results = run_time_resolved_decode(
@@ -161,7 +172,11 @@ def run_benchmark_manifest(
             n_splits=_int_value(row, "n_splits", default_n_splits),
             max_iter=_int_value(row, "max_iter", default_max_iter),
             decoder=decoder,
+            calibration_out_path=calibration_out_csv,
+            calibration_bins=_int_value(row, "calibration_bins", calibration_bins),
         )
+        if calibration_out_csv is not None:
+            calibration_csvs.append(calibration_out_csv)
         if "subject" not in results.columns:
             results.insert(0, "subject", subject)
         else:
@@ -185,7 +200,7 @@ def run_benchmark_manifest(
         )
         plot_path = plot_out
 
-    return BenchmarkRun(result_csvs=result_csvs, aggregate_csv=aggregate_path, plot_path=plot_path)
+    return BenchmarkRun(result_csvs=result_csvs, aggregate_csv=aggregate_path, plot_path=plot_path, calibration_csvs=calibration_csvs)
 
 
 def main() -> None:
@@ -207,6 +222,8 @@ def main() -> None:
     parser.add_argument("--n-splits", type=int, default=5)
     parser.add_argument("--max-iter", type=int, default=1000)
     parser.add_argument("--decoder", choices=DECODER_CHOICES, default="logistic")
+    parser.add_argument("--calibration-dir", type=Path)
+    parser.add_argument("--calibration-bins", type=int, default=10)
     args = parser.parse_args()
 
     run = run_benchmark_manifest(
@@ -225,12 +242,16 @@ def main() -> None:
         default_n_splits=args.n_splits,
         default_max_iter=args.max_iter,
         default_decoder=args.decoder,
+        calibration_dir=args.calibration_dir,
+        calibration_bins=args.calibration_bins,
     )
     print(f"Wrote {len(run.result_csvs)} subject result file(s).")
     if run.aggregate_csv is not None:
         print(f"Wrote aggregate CSV: {run.aggregate_csv}")
     if run.plot_path is not None:
         print(f"Wrote plot: {run.plot_path}")
+    if run.calibration_csvs:
+        print(f"Wrote {len(run.calibration_csvs)} calibration bin file(s).")
 
 
 if __name__ == "__main__":

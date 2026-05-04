@@ -95,3 +95,29 @@ def test_run_benchmark_manifest_supports_decoder_column(tmp_path: Path, monkeypa
     assert [path.name for path in run.result_csvs] == ["sub-01_logistic_time_decode.csv", "sub-01_lda_time_decode.csv"]
     summary = pd.read_csv(run.aggregate_csv)
     assert summary["decoder"].tolist() == ["lda", "logistic"]
+
+
+def test_run_benchmark_manifest_passes_calibration_output_paths(tmp_path: Path, monkeypatch):
+    manifest = tmp_path / "manifest.csv"
+    manifest.write_text(
+        "subject,epochs,metadata_csv,label_column,decoder,calibration_bins\n"
+        "sub-01,data/sub-01_epo.fif,data/sub-01_metadata.csv,condition,logistic,5\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_decode(**kwargs):
+        calls.append(kwargs)
+        return _fake_decode(**kwargs)
+
+    monkeypatch.setattr("reptrace.benchmark.run_time_resolved_decode", fake_decode)
+
+    run = run_benchmark_manifest(
+        manifest,
+        out_dir=tmp_path / "results",
+        calibration_dir=tmp_path / "results" / "calibration",
+    )
+
+    assert calls[0]["calibration_out_path"] == tmp_path / "results" / "calibration" / "sub-01_logistic_calibration_bins.csv"
+    assert calls[0]["calibration_bins"] == 5
+    assert run.calibration_csvs == [calls[0]["calibration_out_path"]]

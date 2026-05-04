@@ -147,6 +147,18 @@ python -m reptrace.benchmark \
   --chance 0.5
 ```
 
+Make calibration explicit in the benchmark report:
+
+```bash
+python -m reptrace.calibration \
+  results/nod_animate_all/summary.csv \
+  --out-report results/nod_animate_all/calibration_report.md
+```
+
+The calibration report orders models by effect-window ECE, then Brier score and
+log loss. Accuracy is included as context, but the report is designed to keep
+probability quality visible rather than treating it as a secondary metric.
+
 Run subject-level inference on the resulting subject CSVs:
 
 ```bash
@@ -185,6 +197,7 @@ python -m reptrace.benchmark \
   --out-dir results/nod_animate_decoders_first5 \
   --aggregate-out results/nod_animate_decoders_first5/summary.csv \
   --plot-out results/nod_animate_decoders_first5/summary.png \
+  --calibration-dir results/nod_animate_decoders_first5/calibration \
   --chance 0.5
 ```
 
@@ -203,6 +216,16 @@ python -m reptrace.report \
 For decoder comparisons, the report includes both raw effect-window accuracy
 and effect minus baseline-window accuracy. The baseline-corrected value is the
 more relevant paper-facing number when a decoder shows pre-stimulus bias.
+
+Create a calibration-first decoder report and aggregate reliability bins:
+
+```bash
+python -m reptrace.calibration \
+  results/nod_animate_decoders_first5/summary.csv \
+  "results/nod_animate_decoders_first5/calibration/*_calibration_bins.csv" \
+  --out-report results/nod_animate_decoders_first5/calibration_report.md \
+  --out-bins results/nod_animate_decoders_first5/reliability_bins.csv
+```
 
 ## Acceptance Target
 

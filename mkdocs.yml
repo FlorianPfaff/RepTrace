@@ -13,6 +13,7 @@ nav:
   - API Reference:
       - Reference Index: reference/index.md
       - Benchmark: reference/benchmark.md
+      - Calibration: reference/calibration.md
       - Decoding: reference/decoding.md
       - Inference: reference/inference.md
       - Metadata: reference/metadata.md

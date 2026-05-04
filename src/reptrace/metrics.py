@@ -49,6 +49,54 @@ def expected_calibration_error(
     return float(ece)
 
 
+def reliability_bins(
+    probabilities: np.ndarray,
+    labels: np.ndarray,
+    *,
+    n_bins: int = 10,
+) -> list[dict[str, float | int]]:
+    """Summarize top-label reliability bins for calibration plots."""
+    if probabilities.ndim != 2:
+        raise ValueError("probabilities must have shape (n_samples, n_classes)")
+    if labels.ndim != 1:
+        raise ValueError("labels must have shape (n_samples,)")
+    if probabilities.shape[0] != labels.shape[0]:
+        raise ValueError("probabilities and labels must contain the same samples")
+    if n_bins < 1:
+        raise ValueError("n_bins must be positive")
+
+    predictions = probabilities.argmax(axis=1)
+    confidences = probabilities.max(axis=1)
+    correct = predictions == labels
+
+    rows: list[dict[str, float | int]] = []
+    edges = np.linspace(0.0, 1.0, n_bins + 1)
+    for bin_index, (left, right) in enumerate(zip(edges[:-1], edges[1:])):
+        if right == 1.0:
+            in_bin = (confidences >= left) & (confidences <= right)
+        else:
+            in_bin = (confidences >= left) & (confidences < right)
+        n_samples = int(np.sum(in_bin))
+        if n_samples:
+            accuracy = float(np.mean(correct[in_bin]))
+            confidence = float(np.mean(confidences[in_bin]))
+        else:
+            accuracy = float("nan")
+            confidence = float("nan")
+        rows.append(
+            {
+                "bin": bin_index,
+                "bin_left": float(left),
+                "bin_right": float(right),
+                "n_samples": n_samples,
+                "accuracy": accuracy,
+                "confidence": confidence,
+                "gap": accuracy - confidence if n_samples else float("nan"),
+            }
+        )
+    return rows
+
+
 def brier_score_multiclass(probabilities: np.ndarray, labels: np.ndarray) -> float:
     """Compute multiclass Brier score using one-hot targets."""
     if probabilities.ndim != 2:
