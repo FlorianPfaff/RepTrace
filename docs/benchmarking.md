@@ -147,6 +147,23 @@ python -m reptrace.benchmark \
   --chance 0.5
 ```
 
+Run subject-level inference on the resulting subject CSVs:
+
+```bash
+python -m reptrace.inference \
+  "results/nod_animate_all/sub-*_time_decode.csv" \
+  --chance 0.5 \
+  --n-permutations 10000 \
+  --cluster-alpha 0.05 \
+  --out-time results/nod_animate_all/inference_time.csv \
+  --out-clusters results/nod_animate_all/inference_clusters.csv
+```
+
+The inference command first averages folds within each subject, then runs a
+one-sided subject-level sign-flip test against chance at each time point. It
+also reports max-cluster-mass corrected p-values for contiguous above-threshold
+periods.
+
 This larger run is the minimum useful scale for subject-level statistical
 testing. The 5-subject pilot is useful for smoke testing and early signal
 checking; paper-facing claims should use the full staged manifest.

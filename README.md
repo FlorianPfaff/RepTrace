@@ -16,7 +16,8 @@ RepTrace currently provides tools for:
 - calibrated classification metrics, including Brier score and expected
   calibration error;
 - grouped cross-validation for session- or run-aware benchmarks; and
-- CSV aggregation and plotting for downstream interpretation.
+- CSV aggregation, plotting, reporting, and subject-level inference for
+  downstream interpretation.
 
 ## Installation
 

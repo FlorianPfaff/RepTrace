@@ -14,6 +14,7 @@ nav:
       - Reference Index: reference/index.md
       - Benchmark: reference/benchmark.md
       - Decoding: reference/decoding.md
+      - Inference: reference/inference.md
       - Metadata: reference/metadata.md
       - Metrics: reference/metrics.md
       - Results: reference/results.md
