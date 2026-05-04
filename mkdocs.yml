@@ -20,6 +20,7 @@ nav:
       - Metadata: reference/metadata.md
       - Metrics: reference/metrics.md
       - Paired Statistics: reference/paired-stats.md
+      - Paper 2 Workflow: reference/paper2-workflow.md
       - Results: reference/results.md
       - Semantic Stages: reference/semantic-stages.md
       - Temporal Model: reference/temporal-model.md

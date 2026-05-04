@@ -19,6 +19,8 @@ RepTrace currently exposes these small modules:
 - `reptrace.plot_time_decode` plots raw or aggregated time-resolved metrics.
 - `reptrace.plot_calibration` plots calibration reliability diagrams.
 - `reptrace.paired_stats` runs paired subject-level decoder comparisons.
+- `reptrace.paper2_workflow` orchestrates the NOD calibration-aware
+  temporal-state evidence workflow and compact paper export.
 - `reptrace.report` creates compact Markdown reports from benchmark outputs.
 - `reptrace.validate_manifest` checks staged files and metadata before decoding.
 - `reptrace.mne_time_decode` provides the MNE epochs decoding command-line

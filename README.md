@@ -120,6 +120,27 @@ THINGS-EEG and THINGS-MEG are natural follow-up benchmarks for larger visual
 object representation experiments. Lab data with task localizers and planning
 periods should come after these public baselines are reproducible.
 
+## Paper 2 Workflow
+
+The calibration-aware temporal-state workflow runs the three staged NOD tasks as
+a second-paper evidence pass. It exports probability observations with matched
+calibrated and uncalibrated emissions, fits conservative sticky switching
+models, compares controls, summarizes semantic stages, and writes compact
+paper-facing artifacts:
+
+```bash
+python -m reptrace.paper2_workflow \
+  --data-root data/nod \
+  --out-dir results/paper2_temporal_state_inference \
+  --paper-export-dir ../2026-05-RepTrace-Paper/results/paper2_temporal_state_inference \
+  --decoders logistic linear_svm \
+  --n-permutations 100
+```
+
+Use `--max-subjects 1 --task nod_animate --n-permutations 5` for a local smoke
+test before launching the full run. Resume is enabled by default; pass
+`--no-resume` only when existing subject-decoder outputs should be overwritten.
+
 ## Documentation
 
 The `docs/` directory contains the project documentation:

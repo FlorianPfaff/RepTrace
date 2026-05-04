@@ -116,6 +116,7 @@ def summarize_category_timecourse(state_traces: pd.DataFrame) -> tuple[pd.DataFr
         aligned.groupby([*_stage_group_columns(aligned), "true_class", "time"], as_index=False)
         .agg(
             n_observations=("time", "size"),
+            n_subjects=("subject", "nunique"),
             n_sequences=("sequence_key", "nunique"),
             posterior_true_class_mean=("posterior_true_class", "mean"),
             posterior_true_class_sem=("posterior_true_class", _time_sem),
@@ -151,6 +152,7 @@ def summarize_dominant_timecourse(state_traces: pd.DataFrame) -> pd.DataFrame:
                 "true_class": dominant_class,
                 "time": float(group_values["time"]),
                 "n_observations": len(group),
+                "n_subjects": group["subject"].nunique(),
                 "n_sequences": group["sequence_key"].nunique(),
                 "posterior_true_class_mean": float(means[dominant_index]),
                 "posterior_true_class_sem": 0.0,
@@ -218,6 +220,7 @@ def detect_stable_stages(
                     "mean_viterbi_match_rate": float(segment["viterbi_match_rate"].mean()),
                     "peak_time": float(peak_row["time"]),
                     "peak_posterior_true_class": float(peak_row["posterior_true_class_mean"]),
+                    "n_subjects_min": int(segment["n_subjects"].min()) if "n_subjects" in segment.columns else 0,
                     "n_sequences_min": int(segment["n_sequences"].min()),
                 }
             )
@@ -257,14 +260,15 @@ def build_stage_report(
     else:
         lines.extend(
             [
-                "| Decoder | Emission mode | Semantic class | Start (s) | Stop (s) | Duration (s) | Mean posterior | Mean match | Peak time (s) |",
-                "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+                "| Decoder | Emission mode | Semantic class | Start (s) | Stop (s) | Duration (s) | Mean posterior | Mean match | Peak time (s) | Subject min |",
+                "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
             ]
         )
         for row in stages.itertuples(index=False):
+            n_subjects_min = row.n_subjects_min if hasattr(row, "n_subjects_min") else 0
             lines.append(
                 f"| {row.decoder} | {row.emission_mode} | {row.semantic_class} | {row.start_time:.3f} | {row.stop_time:.3f} | "
-                f"{row.duration:.3f} | {row.mean_posterior_true_class:.3f} | {row.mean_viterbi_match_rate:.3f} | {row.peak_time:.3f} |"
+                f"{row.duration:.3f} | {row.mean_posterior_true_class:.3f} | {row.mean_viterbi_match_rate:.3f} | {row.peak_time:.3f} | {n_subjects_min} |"
             )
 
     if not time_summary.empty:

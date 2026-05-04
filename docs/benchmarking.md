@@ -491,3 +491,38 @@ python -m reptrace.semantic_stages \
   --out-stages results/nod_animate_all/semantic_stages.csv \
   --out-report results/nod_animate_all/semantic_stages.md
 ```
+
+## Paper 2 Temporal-State Workflow
+
+Use `reptrace.paper2_workflow` to run the calibration-aware temporal-state pass
+across the three staged NOD tasks: animate/inanimate, canine/device, and
+container/covering. The workflow prepares runner-local manifests, validates all
+19 NOD-EEG subjects, runs matched calibrated and uncalibrated emissions in the
+same folds, fits sticky temporal models, compares controls, summarizes semantic
+stages, and writes compact artifacts for the paper repository.
+
+```bash
+python -m reptrace.paper2_workflow \
+  --data-root data/nod \
+  --out-dir results/paper2_temporal_state_inference \
+  --paper-export-dir ../2026-05-RepTrace-Paper/results/paper2_temporal_state_inference \
+  --decoders logistic linear_svm \
+  --n-permutations 100
+```
+
+The top-level outputs are `paper2_summary.csv`, `paper2_stage_reliability.png`,
+`paper2_evidence.md`, and `paper2_commands.md`. The paper export intentionally
+excludes large probability observation and state-trace CSVs.
+
+For a smoke test, run one task and one subject with fewer permutations:
+
+```bash
+python -m reptrace.paper2_workflow \
+  --data-root data/nod \
+  --out-dir results/paper2_smoke \
+  --task nod_animate \
+  --decoders linear_svm \
+  --max-subjects 1 \
+  --n-permutations 5 \
+  --stay-grid-size 20
+```

@@ -23,6 +23,23 @@ DEFAULT_PATTERNS = (
     "inference_*_time.csv",
     "inference_*_clusters.csv",
     "validation.csv",
+    "paper2_summary.csv",
+    "paper2_stage_reliability.png",
+    "paper2_evidence.md",
+    "paper2_commands.md",
+    "temporal_model_all.csv",
+    "emission_compare_all.csv",
+    "semantic_stage_time_all.csv",
+    "semantic_stages_all.csv",
+    "*/validation.csv",
+    "*/summary.csv",
+    "*/summary.png",
+    "*/temporal_model.csv",
+    "*/emission_compare.csv",
+    "*/emission_compare.md",
+    "*/semantic_stage_time.csv",
+    "*/semantic_stages.csv",
+    "*/semantic_stages.md",
 )
 
 

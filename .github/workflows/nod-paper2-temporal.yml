@@ -1,0 +1,106 @@
+name: NOD Paper 2 temporal state inference
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      data_root:
+        description: "Directory containing sub-*_epo.fif and sub-*_events.csv files"
+        required: true
+        default: "../data/nod"
+      output_dir:
+        description: "Repository-relative output directory for derived Paper 2 results"
+        required: true
+        default: "results/paper2_temporal_state_inference"
+      paper_export_dir:
+        description: "Optional paper-repo directory for compact artifacts"
+        required: false
+        default: "../2026-05-RepTrace-Paper/results/paper2_temporal_state_inference"
+      decoders:
+        description: "Space-separated decoder list"
+        required: true
+        default: "logistic linear_svm"
+      n_permutations:
+        description: "Temporal-model control permutations"
+        required: true
+        default: "100"
+      python_version:
+        description: "Python version for the local py launcher"
+        required: true
+        default: "3.12"
+
+concurrency:
+  group: nod-paper2-temporal-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  nod-paper2-temporal:
+    runs-on: [self-hosted, Windows]
+    timeout-minutes: 720
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install dependencies
+        shell: cmd
+        run: |
+          py -${{ inputs.python_version }} --version
+          py -${{ inputs.python_version }} -m pip install --upgrade pip
+          py -${{ inputs.python_version }} -m pip install poetry
+          for /f "delims=" %%P in ('py -${{ inputs.python_version }} -c "import sys; print(sys.executable)"') do set "PYTHON_EXE=%%P"
+          py -${{ inputs.python_version }} -m poetry env use "%PYTHON_EXE%"
+          py -${{ inputs.python_version }} -m poetry install
+
+      - name: Run Paper 2 workflow
+        shell: pwsh
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          $dataRoot = "${{ inputs.data_root }}"
+          if (-not (Test-Path $dataRoot) -and (Test-Path (Join-Path $env:GITHUB_WORKSPACE $dataRoot))) {
+            $dataRoot = Join-Path $env:GITHUB_WORKSPACE $dataRoot
+          }
+          if (-not (Test-Path $dataRoot)) {
+            throw "Data root does not exist: $dataRoot"
+          }
+          $outputDir = Join-Path $env:GITHUB_WORKSPACE "${{ inputs.output_dir }}"
+          $workflowArgs = @(
+            "--data-root", $dataRoot,
+            "--out-dir", $outputDir,
+            "--n-permutations", "${{ inputs.n_permutations }}",
+            "--decoders"
+          )
+          $workflowArgs += "${{ inputs.decoders }}".Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries)
+          $paperExportDir = "${{ inputs.paper_export_dir }}"
+          if ($paperExportDir) {
+            $workflowArgs += @("--paper-export-dir", $paperExportDir)
+          }
+          py -${{ inputs.python_version }} -m poetry run python -m reptrace.paper2_workflow @workflowArgs
+
+      - name: Upload compact Paper 2 artifacts
+        uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: nod-paper2-temporal-${{ github.run_id }}
+          path: |
+            ${{ inputs.output_dir }}/paper2_summary.csv
+            ${{ inputs.output_dir }}/paper2_stage_reliability.png
+            ${{ inputs.output_dir }}/paper2_evidence.md
+            ${{ inputs.output_dir }}/paper2_commands.md
+            ${{ inputs.output_dir }}/temporal_model_all.csv
+            ${{ inputs.output_dir }}/emission_compare_all.csv
+            ${{ inputs.output_dir }}/semantic_stage_time_all.csv
+            ${{ inputs.output_dir }}/semantic_stages_all.csv
+            ${{ inputs.output_dir }}/*/validation.csv
+            ${{ inputs.output_dir }}/*/summary.csv
+            ${{ inputs.output_dir }}/*/summary.png
+            ${{ inputs.output_dir }}/*/temporal_model.csv
+            ${{ inputs.output_dir }}/*/emission_compare.csv
+            ${{ inputs.output_dir }}/*/emission_compare.md
+            ${{ inputs.output_dir }}/*/semantic_stage_time.csv
+            ${{ inputs.output_dir }}/*/semantic_stages.csv
+            ${{ inputs.output_dir }}/*/semantic_stages.md
+          if-no-files-found: warn
