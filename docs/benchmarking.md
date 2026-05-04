@@ -110,6 +110,20 @@ python -m reptrace.benchmark \
 This keeps the experiment scope fixed (same preprocessing, same target labels,
 same window/grid parameters) and changes only the subject set.
 
+Generate a compact Markdown report from the aggregate and subject-level result
+CSVs:
+
+```bash
+python -m reptrace.report \
+  results/nod_animate_first5/summary.csv \
+  "results/nod_animate_first5/sub-*_time_decode.csv" \
+  --chance 0.5 \
+  --out results/nod_animate_first5/report.md
+```
+
+The report records the aggregate peak, baseline-window accuracy,
+effect-window accuracy, calibration metrics at the peak, and per-subject peaks.
+
 ## Acceptance Target
 
 The first useful milestone is not just above-chance accuracy. The benchmark

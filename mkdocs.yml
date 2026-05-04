@@ -18,6 +18,7 @@ nav:
       - Metrics: reference/metrics.md
       - Results: reference/results.md
       - Plotting: reference/plotting.md
+      - Report: reference/report.md
       - Validation: reference/validation.md
 
 theme:
