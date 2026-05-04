@@ -121,3 +121,83 @@ def test_run_benchmark_manifest_passes_calibration_output_paths(tmp_path: Path, 
     assert calls[0]["calibration_out_path"] == tmp_path / "results" / "calibration" / "sub-01_logistic_calibration_bins.csv"
     assert calls[0]["calibration_bins"] == 5
     assert run.calibration_csvs == [calls[0]["calibration_out_path"]]
+
+
+def test_run_benchmark_manifest_resume_skips_complete_existing_rows(tmp_path: Path, monkeypatch):
+    manifest = tmp_path / "manifest.csv"
+    manifest.write_text(
+        "subject,epochs,metadata_csv,label_column\n"
+        "sub-01,data/sub-01_epo.fif,data/sub-01_metadata.csv,condition\n"
+        "sub-02,data/sub-02_epo.fif,data/sub-02_metadata.csv,condition\n",
+        encoding="utf-8",
+    )
+    existing = tmp_path / "results" / "sub-01_time_decode.csv"
+    existing.parent.mkdir()
+    pd.DataFrame(
+        {
+            "subject": ["sub-01"],
+            "fold": [0],
+            "decoder": ["logistic"],
+            "time": [0.1],
+            "accuracy": [0.6],
+            "log_loss": [0.5],
+            "brier": [0.3],
+            "ece": [0.1],
+        }
+    ).to_csv(existing, index=False)
+    calls = []
+
+    def fake_decode(**kwargs):
+        calls.append(kwargs)
+        return _fake_decode(**kwargs)
+
+    monkeypatch.setattr("reptrace.benchmark.run_time_resolved_decode", fake_decode)
+
+    run = run_benchmark_manifest(manifest, out_dir=tmp_path / "results", resume=True)
+
+    assert len(calls) == 1
+    assert calls[0]["out_path"].name == "sub-02_time_decode.csv"
+    assert run.skipped_existing == 1
+    assert [path.name for path in run.result_csvs] == ["sub-01_time_decode.csv", "sub-02_time_decode.csv"]
+    assert pd.read_csv(run.aggregate_csv)["n_subjects"].max() == 2
+
+
+def test_run_benchmark_manifest_resume_reruns_when_calibration_is_missing(tmp_path: Path, monkeypatch):
+    manifest = tmp_path / "manifest.csv"
+    manifest.write_text(
+        "subject,epochs,metadata_csv,label_column,decoder\n"
+        "sub-01,data/sub-01_epo.fif,data/sub-01_metadata.csv,condition,logistic\n",
+        encoding="utf-8",
+    )
+    existing = tmp_path / "results" / "sub-01_logistic_time_decode.csv"
+    existing.parent.mkdir()
+    pd.DataFrame(
+        {
+            "subject": ["sub-01"],
+            "fold": [0],
+            "decoder": ["logistic"],
+            "time": [0.1],
+            "accuracy": [0.6],
+            "log_loss": [0.5],
+            "brier": [0.3],
+            "ece": [0.1],
+        }
+    ).to_csv(existing, index=False)
+    calls = []
+
+    def fake_decode(**kwargs):
+        calls.append(kwargs)
+        return _fake_decode(**kwargs)
+
+    monkeypatch.setattr("reptrace.benchmark.run_time_resolved_decode", fake_decode)
+
+    run = run_benchmark_manifest(
+        manifest,
+        out_dir=tmp_path / "results",
+        calibration_dir=tmp_path / "results" / "calibration",
+        resume=True,
+    )
+
+    assert len(calls) == 1
+    assert run.skipped_existing == 0
+    assert calls[0]["calibration_out_path"] == tmp_path / "results" / "calibration" / "sub-01_logistic_calibration_bins.csv"

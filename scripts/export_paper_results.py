@@ -18,6 +18,8 @@ DEFAULT_PATTERNS = (
     "paired_stats.csv",
     "paired_stats.md",
     "reliability_bins.csv",
+    "inference_time.csv",
+    "inference_clusters.csv",
     "inference_*_time.csv",
     "inference_*_clusters.csv",
     "validation.csv",

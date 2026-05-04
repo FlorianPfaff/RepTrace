@@ -22,6 +22,7 @@ class BenchmarkRun:
     aggregate_csv: Path | None
     plot_path: Path | None
     calibration_csvs: list[Path]
+    skipped_existing: int = 0
 
 
 def _missing(value: Any) -> bool:
@@ -58,6 +59,10 @@ def _resolve_path(value: str | None, base_dir: Path) -> Path | None:
     if not path.is_absolute():
         path = base_dir / path
     return path
+
+
+def _usable_file(path: Path) -> bool:
+    return path.is_file() and path.stat().st_size > 0
 
 
 def _required_path(row: pd.Series, column: str, base_dir: Path) -> Path:
@@ -128,6 +133,7 @@ def run_benchmark_manifest(
     default_decoder: str = "logistic",
     calibration_dir: Path | None = None,
     calibration_bins: int = 10,
+    resume: bool = False,
 ) -> BenchmarkRun:
     """Run a manifest-defined benchmark and optionally aggregate and plot results."""
     manifest = pd.read_csv(manifest_csv)
@@ -138,6 +144,7 @@ def run_benchmark_manifest(
     out_dir.mkdir(parents=True, exist_ok=True)
     result_csvs: list[Path] = []
     calibration_csvs: list[Path] = []
+    skipped_existing = 0
 
     for _, row in manifest.iterrows():
         subject = _string_value(row, "subject")
@@ -156,6 +163,13 @@ def run_benchmark_manifest(
         calibration_out_csv = _resolve_path(_string_value(row, "calibration_out_csv"), manifest_dir)
         if calibration_out_csv is None and calibration_dir is not None:
             calibration_out_csv = calibration_dir / f"{_decoder_output_stem(subject, decoder, 'decoder' in manifest.columns)}_calibration_bins.csv"
+
+        if resume and _usable_file(output_csv) and (calibration_out_csv is None or _usable_file(calibration_out_csv)):
+            result_csvs.append(output_csv)
+            if calibration_out_csv is not None:
+                calibration_csvs.append(calibration_out_csv)
+            skipped_existing += 1
+            continue
 
         metadata_csv = _prepare_or_resolve_metadata(row, manifest_dir, out_dir, subject)
         results = run_time_resolved_decode(
@@ -200,7 +214,13 @@ def run_benchmark_manifest(
         )
         plot_path = plot_out
 
-    return BenchmarkRun(result_csvs=result_csvs, aggregate_csv=aggregate_path, plot_path=plot_path, calibration_csvs=calibration_csvs)
+    return BenchmarkRun(
+        result_csvs=result_csvs,
+        aggregate_csv=aggregate_path,
+        plot_path=plot_path,
+        calibration_csvs=calibration_csvs,
+        skipped_existing=skipped_existing,
+    )
 
 
 def main() -> None:
@@ -224,6 +244,11 @@ def main() -> None:
     parser.add_argument("--decoder", choices=DECODER_CHOICES, default="logistic")
     parser.add_argument("--calibration-dir", type=Path)
     parser.add_argument("--calibration-bins", type=int, default=10)
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip manifest rows whose result CSV and requested calibration-bin CSV already exist.",
+    )
     args = parser.parse_args()
 
     run = run_benchmark_manifest(
@@ -244,8 +269,11 @@ def main() -> None:
         default_decoder=args.decoder,
         calibration_dir=args.calibration_dir,
         calibration_bins=args.calibration_bins,
+        resume=args.resume,
     )
-    print(f"Wrote {len(run.result_csvs)} subject result file(s).")
+    if run.skipped_existing:
+        print(f"Skipped {run.skipped_existing} complete existing row(s).")
+    print(f"Available {len(run.result_csvs)} subject result file(s).")
     if run.aggregate_csv is not None:
         print(f"Wrote aggregate CSV: {run.aggregate_csv}")
     if run.plot_path is not None:

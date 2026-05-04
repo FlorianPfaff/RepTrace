@@ -245,11 +245,39 @@ python -m reptrace.benchmark \
   --aggregate-out results/nod_superclass_container_covering_all/summary.csv \
   --plot-out results/nod_superclass_container_covering_all/summary.png \
   --calibration-dir results/nod_superclass_container_covering_all/calibration \
-  --chance 0.5
+  --chance 0.5 \
+  --resume
 ```
 
 After the benchmark finishes, generate the same report, inference, calibration,
-and reliability outputs as for the canine/device superclass task.
+and reliability outputs as for the canine/device superclass task:
+
+```bash
+python -m reptrace.report \
+  results/nod_superclass_container_covering_all/summary.csv \
+  "results/nod_superclass_container_covering_all/sub-*_time_decode.csv" \
+  --out results/nod_superclass_container_covering_all/report.md \
+  --chance 0.5
+
+python -m reptrace.inference \
+  "results/nod_superclass_container_covering_all/sub-*_time_decode.csv" \
+  --chance 0.5 \
+  --n-permutations 10000 \
+  --out-time results/nod_superclass_container_covering_all/inference_time.csv \
+  --out-clusters results/nod_superclass_container_covering_all/inference_clusters.csv
+
+python -m reptrace.calibration \
+  results/nod_superclass_container_covering_all/summary.csv \
+  "results/nod_superclass_container_covering_all/calibration/*_calibration_bins.csv" \
+  --out-report results/nod_superclass_container_covering_all/calibration_report.md \
+  --out-bins results/nod_superclass_container_covering_all/reliability_bins.csv
+
+python -m reptrace.plot_calibration \
+  results/nod_superclass_container_covering_all/reliability_bins.csv \
+  --out results/nod_superclass_container_covering_all/reliability.png \
+  --time-window 0.1 0.8 \
+  --title "NOD container/covering calibration"
+```
 
 ## Decoder Comparison
 
@@ -333,8 +361,10 @@ gh workflow run nod-decoder-all.yml \
 The workflow rewrites the committed manifest to use the supplied `data_root`,
 runs logistic regression, LDA, and calibrated linear SVM across all 19 staged
 NOD-EEG subjects, then uploads only compact summary, calibration, and inference
-artifacts. Use an absolute `data_root` when the self-hosted runner keeps the NOD
-files outside the repository workspace.
+artifacts. The benchmark step uses `--resume`, so a rerun in the same output
+directory skips completed subject-decoder rows whose result and calibration-bin
+CSVs already exist. Use an absolute `data_root` when the self-hosted runner
+keeps the NOD files outside the repository workspace.
 
 After downloading or locating the workflow output directory, export only
 paper-safe artifacts into the paper repository:
@@ -353,3 +383,7 @@ python scripts/export_paper_results.py \
 The first useful milestone is not just above-chance accuracy. The benchmark
 should produce stable probability traces and calibration metrics that can be
 compared across subjects, sessions, and decoder variants.
+
+For interrupted runs, rerun the same command with `--resume`. RepTrace will keep
+complete existing rows, regenerate missing rows, and rebuild the aggregate
+summary and plot from the combined output set.
