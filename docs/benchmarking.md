@@ -272,6 +272,24 @@ python -m reptrace.calibration \
   --out-bins results/nod_animate_decoders_first5/reliability_bins.csv
 ```
 
+Run the full 19-subject decoder comparison on a self-hosted GitHub Actions
+runner:
+
+```bash
+gh workflow run nod-decoder-all.yml \
+  --repo FlorianPfaff/RepTrace \
+  --ref main \
+  -f data_root=../data/nod \
+  -f output_dir=results/nod_animate_decoders_all \
+  -f n_permutations=10000
+```
+
+The workflow rewrites the committed manifest to use the supplied `data_root`,
+runs logistic regression, LDA, and calibrated linear SVM across all 19 staged
+NOD-EEG subjects, then uploads only compact summary, calibration, and inference
+artifacts. Use an absolute `data_root` when the self-hosted runner keeps the NOD
+files outside the repository workspace.
+
 ## Acceptance Target
 
 The first useful milestone is not just above-chance accuracy. The benchmark
