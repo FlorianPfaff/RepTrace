@@ -272,6 +272,16 @@ python -m reptrace.calibration \
   --out-bins results/nod_animate_decoders_first5/reliability_bins.csv
 ```
 
+Plot an effect-window reliability diagram from aggregate reliability bins:
+
+```bash
+python -m reptrace.plot_calibration \
+  results/nod_animate_decoders_first5/reliability_bins.csv \
+  --out results/nod_animate_decoders_first5/reliability.png \
+  --time-window 0.1 0.8 \
+  --title "NOD animate/inanimate decoder calibration"
+```
+
 Run the full 19-subject decoder comparison on a self-hosted GitHub Actions
 runner:
 

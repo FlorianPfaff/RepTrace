@@ -10,6 +10,7 @@ from pathlib import Path
 DEFAULT_PATTERNS = (
     "summary.csv",
     "summary.png",
+    "reliability.png",
     "report.md",
     "calibration_report.md",
     "reliability_bins.csv",
