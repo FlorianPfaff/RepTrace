@@ -11,6 +11,7 @@ def _fake_decode(**kwargs):
         {
             "fold": [0, 1],
             "decoder": [kwargs.get("decoder", "logistic"), kwargs.get("decoder", "logistic")],
+            "emission_mode": [kwargs.get("emission_mode", "calibrated"), kwargs.get("emission_mode", "calibrated")],
             "time": [0.1, 0.1],
             "accuracy": [0.6, 0.8],
             "log_loss": [0.5, 0.4],
@@ -28,6 +29,7 @@ def _fake_decode(**kwargs):
                 "subject": [kwargs.get("subject", "sub-01")],
                 "fold": [0],
                 "decoder": [kwargs.get("decoder", "logistic")],
+                "emission_mode": [kwargs.get("emission_mode", "calibrated")],
                 "time": [0.1],
                 "sample_index": [0],
                 "sequence_id": [0],
@@ -169,6 +171,33 @@ def test_run_benchmark_manifest_passes_observation_output_paths(tmp_path: Path, 
     assert calls[0]["subject"] == "sub-01"
     assert run.observation_csvs == [calls[0]["observation_out_path"]]
     assert pd.read_csv(run.observation_csvs[0])["prob_class_1"].tolist() == [0.7]
+
+
+def test_run_benchmark_manifest_supports_emission_mode_column(tmp_path: Path, monkeypatch):
+    manifest = tmp_path / "manifest.csv"
+    manifest.write_text(
+        "subject,epochs,metadata_csv,label_column,decoder,emission_mode\n"
+        "sub-01,data/sub-01_epo.fif,data/sub-01_metadata.csv,condition,linear_svm,calibrated\n"
+        "sub-01,data/sub-01_epo.fif,data/sub-01_metadata.csv,condition,linear_svm,uncalibrated\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_decode(**kwargs):
+        calls.append(kwargs)
+        return _fake_decode(**kwargs)
+
+    monkeypatch.setattr("reptrace.benchmark.run_time_resolved_decode", fake_decode)
+
+    run = run_benchmark_manifest(manifest, out_dir=tmp_path / "results")
+
+    assert [call["emission_mode"] for call in calls] == ["calibrated", "uncalibrated"]
+    assert [path.name for path in run.result_csvs] == [
+        "sub-01_linear_svm_calibrated_time_decode.csv",
+        "sub-01_linear_svm_uncalibrated_time_decode.csv",
+    ]
+    summary = pd.read_csv(run.aggregate_csv)
+    assert sorted(summary["emission_mode"].unique().tolist()) == ["calibrated", "uncalibrated"]
 
 
 def test_run_benchmark_manifest_resume_skips_complete_existing_rows(tmp_path: Path, monkeypatch):

@@ -1,6 +1,14 @@
 import numpy as np
 
-from reptrace.decoding import DECODER_CHOICES, make_cross_validator, make_decoder, normalize_decoder_name, time_windows
+from reptrace.decoding import (
+    DECODER_CHOICES,
+    make_cross_validator,
+    make_decoder,
+    normalize_decoder_name,
+    predict_emission_probabilities,
+    score_to_probabilities,
+    time_windows,
+)
 
 
 def test_time_windows_returns_expected_centers():
@@ -32,6 +40,26 @@ def test_make_decoder_produces_probabilities_for_standard_decoders():
         model.fit(features, labels)
         probabilities = model.predict_proba(features[:3])
         assert probabilities.shape == (3, 2)
+
+
+def test_uncalibrated_linear_svm_uses_score_derived_emissions():
+    rng = np.random.default_rng(13)
+    features = rng.normal(size=(30, 4))
+    labels = np.array([0, 1] * 15)
+
+    model = make_decoder("linear_svm", max_iter=2000, emission_mode="uncalibrated")
+    model.fit(features, labels)
+    probabilities = predict_emission_probabilities(model, features[:3], emission_mode="uncalibrated")
+
+    assert probabilities.shape == (3, 2)
+    assert probabilities.sum(axis=1).round(6).tolist() == [1.0, 1.0, 1.0]
+
+
+def test_score_to_probabilities_handles_binary_scores():
+    probabilities = score_to_probabilities(np.array([-1.0, 0.0, 1.0]))
+
+    assert probabilities.shape == (3, 2)
+    assert probabilities.sum(axis=1).round(6).tolist() == [1.0, 1.0, 1.0]
 
 
 def test_normalize_decoder_name_accepts_svm_alias():

@@ -8,6 +8,8 @@ import pandas as pd
 
 from reptrace.results import read_time_decode_results
 
+COMPARISON_GROUP_COLUMNS = ("decoder", "emission_mode")
+
 
 def _window_mean(frame: pd.DataFrame, column: str, start: float, stop: float) -> float:
     window = frame[(frame["time"] >= start) & (frame["time"] <= stop)]
@@ -18,6 +20,10 @@ def _window_mean(frame: pd.DataFrame, column: str, start: float, stop: float) ->
 
 def _format_float(value: float, digits: int = 3) -> str:
     return f"{value:.{digits}f}"
+
+
+def _comparison_group_columns(frame: pd.DataFrame) -> list[str]:
+    return [column for column in COMPARISON_GROUP_COLUMNS if column in frame.columns]
 
 
 def summarize_aggregate_time_decode(
@@ -87,17 +93,20 @@ def summarize_decoder_comparison(
     effect_window: tuple[float, float] = (0.1, 0.8),
 ) -> pd.DataFrame:
     """Summarize aggregate benchmark metrics separately for each decoder."""
-    if "decoder" not in summary.columns:
+    group_columns = _comparison_group_columns(summary)
+    if "decoder" not in group_columns:
         raise ValueError("Summary must contain a 'decoder' column for decoder comparison.")
 
     rows = []
-    for decoder, decoder_frame in summary.groupby("decoder", sort=True):
+    for keys, decoder_frame in summary.groupby(group_columns, sort=True):
+        key_values = keys if isinstance(keys, tuple) else (keys,)
+        group_values = dict(zip(group_columns, key_values, strict=True))
         peak = decoder_frame.loc[decoder_frame["accuracy_mean"].idxmax()]
         baseline_accuracy = _window_mean(decoder_frame, "accuracy_mean", *baseline_window)
         effect_accuracy = _window_mean(decoder_frame, "accuracy_mean", *effect_window)
         rows.append(
             {
-                "decoder": decoder,
+                **group_values,
                 "n_subjects": int(peak["n_subjects"]),
                 "peak_time": float(peak["time"]),
                 "peak_accuracy": float(peak["accuracy_mean"]),
@@ -122,12 +131,15 @@ def build_time_decode_report(
 ) -> str:
     """Build a Markdown report for a time-resolved decoding benchmark."""
     summary = pd.read_csv(summary_csv)
-    if "decoder" in summary.columns and summary["decoder"].nunique() > 1:
+    comparison_columns = _comparison_group_columns(summary)
+    has_comparison = "decoder" in summary.columns and summary.groupby(comparison_columns).ngroups > 1
+    if has_comparison:
         comparison = summarize_decoder_comparison(
             summary,
             baseline_window=baseline_window,
             effect_window=effect_window,
         )
+        has_emission_mode = "emission_mode" in comparison.columns
         lines = [
             "# RepTrace Decoder Comparison Report",
             "",
@@ -135,12 +147,25 @@ def build_time_decode_report(
             f"- Baseline window: {_format_float(baseline_window[0])} to {_format_float(baseline_window[1])} s",
             f"- Effect window: {_format_float(effect_window[0])} to {_format_float(effect_window[1])} s",
             "",
-            "| Decoder | Subjects | Peak time (s) | Peak accuracy | Baseline accuracy | Effect accuracy | Effect minus baseline | Peak log loss | Peak Brier | Peak ECE |",
-            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
+        if has_emission_mode:
+            lines.extend(
+                [
+                    "| Decoder | Emission mode | Subjects | Peak time (s) | Peak accuracy | Baseline accuracy | Effect accuracy | Effect minus baseline | Peak log loss | Peak Brier | Peak ECE |",
+                    "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "| Decoder | Subjects | Peak time (s) | Peak accuracy | Baseline accuracy | Effect accuracy | Effect minus baseline | Peak log loss | Peak Brier | Peak ECE |",
+                    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+                ]
+            )
         for row in comparison.itertuples(index=False):
+            emission_prefix = f"| {row.decoder} | {row.emission_mode} |" if has_emission_mode else f"| {row.decoder} |"
             lines.append(
-                f"| {row.decoder} | {row.n_subjects} | {_format_float(row.peak_time)} | {_format_float(row.peak_accuracy)} | "
+                f"{emission_prefix} {row.n_subjects} | {_format_float(row.peak_time)} | {_format_float(row.peak_accuracy)} | "
                 f"{_format_float(row.baseline_accuracy_mean)} | {_format_float(row.effect_accuracy_mean)} | {_format_float(row.effect_minus_baseline)} | "
                 f"{_format_float(row.peak_log_loss)} | {_format_float(row.peak_brier)} | {_format_float(row.peak_ece)} |"
             )

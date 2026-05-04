@@ -60,15 +60,17 @@ def test_run_time_resolved_decode_writes_probability_observations(tmp_path: Path
         max_iter=2000,
         observation_out_path=observations_out,
         subject="sub-01",
+        emission_mode="both",
     )
 
     observations = pd.read_csv(observations_out)
 
-    assert len(observations) == 16
+    assert len(observations) == 32
     assert {
         "subject",
         "fold",
         "decoder",
+        "emission_mode",
         "time",
         "sample_index",
         "sequence_id",
@@ -80,4 +82,5 @@ def test_run_time_resolved_decode_writes_probability_observations(tmp_path: Path
         "prob_class_1",
     }.issubset(observations.columns)
     assert observations["subject"].unique().tolist() == ["sub-01"]
-    assert observations[["prob_class_0", "prob_class_1"]].sum(axis=1).round(6).tolist() == [1.0] * 16
+    assert sorted(observations["emission_mode"].unique().tolist()) == ["calibrated", "uncalibrated"]
+    assert observations[["prob_class_0", "prob_class_1"]].sum(axis=1).round(6).tolist() == [1.0] * 32

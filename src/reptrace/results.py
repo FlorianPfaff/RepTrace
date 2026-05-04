@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 
 METRIC_COLUMNS = ("accuracy", "log_loss", "brier", "ece")
+SUMMARY_GROUP_COLUMNS = ("decoder", "emission_mode")
 
 
 def read_time_decode_results(
@@ -31,6 +32,8 @@ def read_time_decode_results(
             frame["subject"] = csv_path.stem
         else:
             frame["subject"] = frame["subject"].astype(str)
+        if "emission_mode" not in frame.columns:
+            frame["emission_mode"] = "calibrated"
         frame["source_file"] = csv_path.name
         frames.append(frame)
 
@@ -42,8 +45,11 @@ def aggregate_time_decode_results(results: pd.DataFrame) -> pd.DataFrame:
     missing = [column for column in ("subject", "time", *METRIC_COLUMNS) if column not in results.columns]
     if missing:
         raise ValueError(f"Results are missing required columns: {missing}")
+    if "emission_mode" in results.columns:
+        results = results.copy()
+        results["emission_mode"] = results["emission_mode"].fillna("calibrated")
 
-    group_columns = [column for column in ("decoder",) if column in results.columns]
+    group_columns = [column for column in SUMMARY_GROUP_COLUMNS if column in results.columns]
     subject_time_keys = [*group_columns, "subject", "time"]
     aggregate_keys = [*group_columns, "time"]
     subject_time = (

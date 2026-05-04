@@ -11,6 +11,12 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 
+def _display_label(row: pd.Series | dict) -> str:
+    decoder = str(row["decoder"])
+    emission_mode = row.get("emission_mode")
+    return decoder if pd.isna(emission_mode) or emission_mode is None else f"{decoder} / {emission_mode}"
+
+
 def _window(frame: pd.DataFrame, time_window: tuple[float, float] | None) -> pd.DataFrame:
     if time_window is None:
         return frame
@@ -35,9 +41,11 @@ def summarize_reliability_curve(
     bins = _window(reliability_bins.copy(), time_window)
     if "decoder" not in bins.columns:
         bins["decoder"] = "overall"
+    if "emission_mode" not in bins.columns:
+        bins["emission_mode"] = "calibrated"
 
     rows = []
-    group_columns = ["decoder", "bin", "bin_left", "bin_right"]
+    group_columns = ["decoder", "emission_mode", "bin", "bin_left", "bin_right"]
     for keys, group in bins.groupby(group_columns, sort=True):
         n_samples = int(group["n_samples"].sum())
         if n_samples:
@@ -68,19 +76,19 @@ def plot_reliability_diagram(
 ) -> Path:
     """Plot a reliability diagram from aggregated reliability-bin CSV output."""
     curve = summarize_reliability_curve(pd.read_csv(reliability_bins_csv), time_window=time_window)
-    decoders = list(curve["decoder"].drop_duplicates())
-    if not decoders:
+    groups = list(curve[["decoder", "emission_mode"]].drop_duplicates().itertuples(index=False, name=None))
+    if not groups:
         raise ValueError("No reliability-bin rows available to plot.")
 
-    n_decoders = len(decoders)
-    n_cols = min(3, n_decoders)
-    n_rows = (n_decoders + n_cols - 1) // n_cols
+    n_groups = len(groups)
+    n_cols = min(3, n_groups)
+    n_rows = (n_groups + n_cols - 1) // n_cols
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(4.2 * n_cols, 4.0 * n_rows), squeeze=False)
     axes_flat = axes.ravel()
 
-    for index, decoder in enumerate(decoders):
+    for index, (decoder, emission_mode) in enumerate(groups):
         ax = axes_flat[index]
-        group = curve[(curve["decoder"] == decoder) & (curve["n_samples"] > 0)].sort_values("bin")
+        group = curve[(curve["decoder"] == decoder) & (curve["emission_mode"] == emission_mode) & (curve["n_samples"] > 0)].sort_values("bin")
         ax.plot([0.0, 1.0], [0.0, 1.0], color="0.5", linestyle="--", linewidth=1.0, label="perfect")
         ax.plot(group["confidence"], group["accuracy"], color="tab:blue", linewidth=1.5)
         sizes = 25 + 125 * group["n_samples"] / max(group["n_samples"].max(), 1)
@@ -89,10 +97,10 @@ def plot_reliability_diagram(
         ax.set_ylim(0.0, 1.0)
         ax.set_xlabel("Mean confidence")
         ax.set_ylabel("Empirical accuracy")
-        ax.set_title(str(decoder))
+        ax.set_title(_display_label({"decoder": decoder, "emission_mode": emission_mode}))
         ax.grid(True, color="0.9", linewidth=0.8)
 
-    for index in range(n_decoders, len(axes_flat)):
+    for index in range(n_groups, len(axes_flat)):
         axes_flat[index].axis("off")
 
     if title:

@@ -8,6 +8,8 @@ RepTrace currently exposes these small modules:
 - `reptrace.inference` runs subject-level sign-flip and cluster inference.
 - `reptrace.metrics` provides calibration and probabilistic scoring metrics.
 - `reptrace.decoding` provides cross-validation and baseline decoder helpers.
+- `reptrace.emission_compare` compares calibrated and uncalibrated temporal
+  state-inference evidence.
 - `reptrace.metadata` provides simple metadata labeling helpers.
 - `reptrace.results` aggregates fold- and subject-level result CSV files.
 - `reptrace.semantic_stages` summarizes category-conditioned state traces into

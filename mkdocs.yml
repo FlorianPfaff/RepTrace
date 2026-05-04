@@ -15,6 +15,7 @@ nav:
       - Benchmark: reference/benchmark.md
       - Calibration: reference/calibration.md
       - Decoding: reference/decoding.md
+      - Emission Compare: reference/emission-compare.md
       - Inference: reference/inference.md
       - Metadata: reference/metadata.md
       - Metrics: reference/metrics.md

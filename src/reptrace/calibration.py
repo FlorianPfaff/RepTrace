@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 
 CALIBRATION_METRICS = ("log_loss", "brier", "ece")
+GROUP_COLUMNS = ("decoder", "emission_mode")
 
 
 def _expand_paths(patterns: list[str]) -> list[Path]:
@@ -31,6 +32,10 @@ def _format_float(value: float, digits: int = 3) -> str:
     return f"{value:.{digits}f}"
 
 
+def _present_group_columns(frame: pd.DataFrame) -> list[str]:
+    return [column for column in GROUP_COLUMNS if column in frame.columns]
+
+
 def summarize_calibration_metrics(
     summary: pd.DataFrame,
     *,
@@ -43,16 +48,19 @@ def summarize_calibration_metrics(
     if missing:
         raise ValueError(f"Summary is missing required columns: {missing}")
 
-    group_items = summary.groupby("decoder", sort=True) if "decoder" in summary.columns else [("overall", summary)]
+    group_columns = _present_group_columns(summary)
+    group_items = summary.groupby(group_columns, sort=True) if group_columns else [("overall", summary)]
     rows = []
-    for decoder, frame in group_items:
+    for keys, frame in group_items:
+        key_values = keys if isinstance(keys, tuple) else (keys,)
+        group_values = dict(zip(group_columns, key_values, strict=True)) if group_columns else {"decoder": "overall"}
         effect = frame[(frame["time"] >= effect_window[0]) & (frame["time"] <= effect_window[1])]
         if effect.empty:
             raise ValueError(f"No time points found in effect window [{effect_window[0]}, {effect_window[1]}].")
         best_ece = effect.loc[effect["ece_mean"].idxmin()]
         rows.append(
             {
-                "decoder": str(decoder),
+                **group_values,
                 "n_subjects": int(frame["n_subjects"].max()),
                 "baseline_accuracy_mean": _window_mean(frame, "accuracy_mean", *baseline_window),
                 "effect_accuracy_mean": _window_mean(frame, "accuracy_mean", *effect_window),
@@ -83,11 +91,13 @@ def aggregate_reliability_bins(csv_paths: list[Path]) -> pd.DataFrame:
             raise ValueError(f"{csv_path} is missing required columns: {missing}")
         if "decoder" not in frame.columns:
             frame["decoder"] = "overall"
+        if "emission_mode" not in frame.columns:
+            frame["emission_mode"] = "calibrated"
         frame["source_file"] = csv_path.name
         frames.append(frame)
 
     bins = pd.concat(frames, ignore_index=True)
-    group_columns = ["decoder", "time", "bin", "bin_left", "bin_right"]
+    group_columns = ["decoder", "emission_mode", "time", "bin", "bin_left", "bin_right"]
     rows = []
     for keys, group in bins.groupby(group_columns, sort=True):
         n_samples = group["n_samples"].sum()
@@ -122,6 +132,7 @@ def build_calibration_report(
         baseline_window=baseline_window,
         effect_window=effect_window,
     )
+    has_emission_mode = "emission_mode" in summary.columns
     lines = [
         "# RepTrace Calibration Report",
         "",
@@ -129,12 +140,25 @@ def build_calibration_report(
         f"- Baseline window: {_format_float(baseline_window[0])} to {_format_float(baseline_window[1])} s",
         f"- Effect window: {_format_float(effect_window[0])} to {_format_float(effect_window[1])} s",
         "",
-        "| Decoder | Subjects | Effect ECE | Effect Brier | Effect log loss | Effect accuracy | Baseline accuracy | Best ECE time (s) | Best ECE | Accuracy at best ECE |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
+    if has_emission_mode:
+        lines.extend(
+            [
+                "| Decoder | Emission mode | Subjects | Effect ECE | Effect Brier | Effect log loss | Effect accuracy | Baseline accuracy | Best ECE time (s) | Best ECE | Accuracy at best ECE |",
+                "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "| Decoder | Subjects | Effect ECE | Effect Brier | Effect log loss | Effect accuracy | Baseline accuracy | Best ECE time (s) | Best ECE | Accuracy at best ECE |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
     for row in summary.itertuples(index=False):
+        emission_prefix = f"| {row.decoder} | {row.emission_mode} |" if has_emission_mode else f"| {row.decoder} |"
         lines.append(
-            f"| {row.decoder} | {row.n_subjects} | {_format_float(row.effect_ece_mean)} | {_format_float(row.effect_brier_mean)} | "
+            f"{emission_prefix} {row.n_subjects} | {_format_float(row.effect_ece_mean)} | {_format_float(row.effect_brier_mean)} | "
             f"{_format_float(row.effect_log_loss_mean)} | {_format_float(row.effect_accuracy_mean)} | {_format_float(row.baseline_accuracy_mean)} | "
             f"{_format_float(row.best_ece_time)} | {_format_float(row.best_ece)} | {_format_float(row.accuracy_at_best_ece)} |"
         )

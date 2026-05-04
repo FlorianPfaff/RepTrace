@@ -34,7 +34,8 @@ python -m reptrace.mne_time_decode \
   --window-ms 20 \
   --step-ms 10 \
   --out results/nod_sub-01_animate.csv \
-  --observations-out results/nod_sub-01_animate_observations.csv
+  --observations-out results/nod_sub-01_animate_observations.csv \
+  --emission-mode both
 ```
 
 The output CSV contains fold-wise accuracy, log loss, Brier score, and expected
@@ -67,6 +68,22 @@ persistence gain relative to a uniform-memory baseline, plus controls that
 shuffle time order, shuffle probability-label columns, and fit the same model in
 the pre-stimulus baseline window. The optional state trace CSV contains Viterbi
 states and posterior state probabilities for downstream sequence analyses.
+
+When the observations contain both calibrated and uncalibrated emissions, compare
+which emission mode gives cleaner state inference:
+
+```bash
+python -m reptrace.emission_compare \
+  results/nod_sub-01_animate_temporal_model.csv \
+  --out-csv results/nod_sub-01_animate_emission_compare.csv \
+  --out-report results/nod_sub-01_animate_emission_compare.md
+```
+
+The comparison uses the temporal model's persistence gain. Its main value is the
+control margin: observed effect-window gain minus the strongest baseline-window,
+shuffled-time, or shuffled-label control gain. A positive calibrated-minus-
+uncalibrated margin is evidence that calibrated probabilities give cleaner
+state inference, not merely nicer reliability plots.
 
 Ask the first NOD neuroscience question from the state traces:
 
@@ -134,6 +151,7 @@ python -m reptrace.benchmark \
   --aggregate-out results/nod_animate_sub01_summary.csv \
   --plot-out results/nod_animate_sub01_summary.png \
   --observation-dir results/nod_animate_sub01/observations \
+  --emission-mode both \
   --chance 0.5
 ```
 
@@ -453,6 +471,15 @@ python -m reptrace.temporal_model \
   --out-summary results/nod_animate_all/temporal_model.csv \
   --out-states results/nod_animate_all/state_trace.csv \
   --n-permutations 100
+```
+
+Compare calibrated versus uncalibrated emissions:
+
+```bash
+python -m reptrace.emission_compare \
+  results/nod_animate_all/temporal_model.csv \
+  --out-csv results/nod_animate_all/emission_compare.csv \
+  --out-report results/nod_animate_all/emission_compare.md
 ```
 
 Then summarize category-conditioned stages:

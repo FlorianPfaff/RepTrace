@@ -11,7 +11,9 @@ from reptrace.metadata import prepare_binary_metadata
 from reptrace.mne_time_decode import run_time_resolved_decode
 from reptrace.plot_time_decode import plot_time_decode_results
 from reptrace.results import aggregate_time_decode_csvs
-from reptrace.decoding import DECODER_CHOICES, normalize_decoder_name
+from reptrace.decoding import DECODER_CHOICES, EMISSION_MODE_CHOICES, normalize_decoder_name, normalize_emission_mode
+
+EMISSION_RUN_CHOICES = (*EMISSION_MODE_CHOICES, "both")
 
 
 @dataclass(frozen=True)
@@ -84,6 +86,22 @@ def _decoder_output_stem(subject: str, decoder: str, has_decoder_column: bool) -
     return f"{subject}_{_safe_name(decoder)}" if has_decoder_column else subject
 
 
+def _output_stem(
+    subject: str,
+    decoder: str,
+    emission_mode: str,
+    *,
+    has_decoder_column: bool,
+    has_emission_mode_column: bool,
+) -> str:
+    parts = [subject]
+    if has_decoder_column:
+        parts.append(_safe_name(decoder))
+    if has_emission_mode_column:
+        parts.append(_safe_name(emission_mode))
+    return "_".join(parts)
+
+
 def _prepare_or_resolve_metadata(row: pd.Series, manifest_dir: Path, out_dir: Path, subject: str) -> Path | None:
     events_csv = _resolve_path(_string_value(row, "events_csv"), manifest_dir)
     metadata_csv = _resolve_path(_string_value(row, "metadata_csv"), manifest_dir)
@@ -132,6 +150,7 @@ def run_benchmark_manifest(
     default_n_splits: int = 5,
     default_max_iter: int = 1000,
     default_decoder: str = "logistic",
+    default_emission_mode: str = "calibrated",
     calibration_dir: Path | None = None,
     calibration_bins: int = 10,
     observation_dir: Path | None = None,
@@ -158,17 +177,26 @@ def run_benchmark_manifest(
         if label_column is None:
             raise ValueError(f"Subject '{subject}' has no label column.")
         decoder = normalize_decoder_name(_string_value(row, "decoder", default_decoder) or default_decoder)
+        emission_mode = _string_value(row, "emission_mode", default_emission_mode) or default_emission_mode
+        if emission_mode != "both":
+            emission_mode = normalize_emission_mode(emission_mode)
+        output_stem = _output_stem(
+            subject,
+            decoder,
+            emission_mode,
+            has_decoder_column="decoder" in manifest.columns,
+            has_emission_mode_column="emission_mode" in manifest.columns,
+        )
 
         output_csv = _resolve_path(_string_value(row, "out_csv"), manifest_dir)
         if output_csv is None:
-            output_stem = f"{_decoder_output_stem(subject, decoder, 'decoder' in manifest.columns)}_time_decode"
-            output_csv = out_dir / f"{output_stem}.csv"
+            output_csv = out_dir / f"{output_stem}_time_decode.csv"
         calibration_out_csv = _resolve_path(_string_value(row, "calibration_out_csv"), manifest_dir)
         if calibration_out_csv is None and calibration_dir is not None:
-            calibration_out_csv = calibration_dir / f"{_decoder_output_stem(subject, decoder, 'decoder' in manifest.columns)}_calibration_bins.csv"
+            calibration_out_csv = calibration_dir / f"{output_stem}_calibration_bins.csv"
         observation_out_csv = _resolve_path(_string_value(row, "observation_out_csv"), manifest_dir)
         if observation_out_csv is None and observation_dir is not None:
-            observation_out_csv = observation_dir / f"{_decoder_output_stem(subject, decoder, 'decoder' in manifest.columns)}_observations.csv"
+            observation_out_csv = observation_dir / f"{output_stem}_observations.csv"
 
         if (
             resume
@@ -199,6 +227,7 @@ def run_benchmark_manifest(
             n_splits=_int_value(row, "n_splits", default_n_splits),
             max_iter=_int_value(row, "max_iter", default_max_iter),
             decoder=decoder,
+            emission_mode=emission_mode,
             calibration_out_path=calibration_out_csv,
             calibration_bins=_int_value(row, "calibration_bins", calibration_bins),
             observation_out_path=observation_out_csv,
@@ -260,6 +289,7 @@ def main() -> None:
     parser.add_argument("--n-splits", type=int, default=5)
     parser.add_argument("--max-iter", type=int, default=1000)
     parser.add_argument("--decoder", choices=DECODER_CHOICES, default="logistic")
+    parser.add_argument("--emission-mode", choices=EMISSION_RUN_CHOICES, default="calibrated")
     parser.add_argument("--calibration-dir", type=Path)
     parser.add_argument("--calibration-bins", type=int, default=10)
     parser.add_argument("--observation-dir", type=Path, help="Optional directory for held-out trial/time probability observation CSVs.")
@@ -286,6 +316,7 @@ def main() -> None:
         default_n_splits=args.n_splits,
         default_max_iter=args.max_iter,
         default_decoder=args.decoder,
+        default_emission_mode=args.emission_mode,
         calibration_dir=args.calibration_dir,
         calibration_bins=args.calibration_bins,
         observation_dir=args.observation_dir,

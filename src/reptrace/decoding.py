@@ -10,6 +10,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
 
 DECODER_CHOICES = ("logistic", "lda", "linear_svm")
+EMISSION_MODE_CHOICES = ("calibrated", "uncalibrated")
 
 
 def make_logistic_decoder(max_iter: int = 1000):
@@ -17,13 +18,10 @@ def make_logistic_decoder(max_iter: int = 1000):
     return make_decoder("logistic", max_iter=max_iter)
 
 
-def make_decoder(name: str = "logistic", *, max_iter: int = 1000):
+def make_decoder(name: str = "logistic", *, max_iter: int = 1000, emission_mode: str = "calibrated"):
     """Create a standard probability-producing decoder by name."""
-    normalized = name.lower().replace("-", "_")
-    if normalized == "svm":
-        normalized = "linear_svm"
-    if normalized not in DECODER_CHOICES:
-        raise ValueError(f"Unknown decoder '{name}'. Available decoders: {', '.join(DECODER_CHOICES)}.")
+    normalized = normalize_decoder_name(name)
+    emission_mode = normalize_emission_mode(emission_mode)
 
     if normalized == "logistic":
         return make_pipeline(
@@ -39,14 +37,18 @@ def make_decoder(name: str = "logistic", *, max_iter: int = 1000):
             StandardScaler(),
             LinearDiscriminantAnalysis(solver="svd"),
         )
-    return CalibratedClassifierCV(
-        estimator=make_pipeline(
-            StandardScaler(),
-            LinearSVC(
-                class_weight="balanced",
-                max_iter=max_iter,
-            ),
+
+    linear_svm = make_pipeline(
+        StandardScaler(),
+        LinearSVC(
+            class_weight="balanced",
+            max_iter=max_iter,
         ),
+    )
+    if emission_mode == "uncalibrated":
+        return linear_svm
+    return CalibratedClassifierCV(
+        estimator=linear_svm,
         method="sigmoid",
         cv=3,
     )
@@ -60,6 +62,40 @@ def normalize_decoder_name(name: str) -> str:
     if normalized not in DECODER_CHOICES:
         raise ValueError(f"Unknown decoder '{name}'. Available decoders: {', '.join(DECODER_CHOICES)}.")
     return normalized
+
+
+def normalize_emission_mode(mode: str) -> str:
+    """Normalize calibrated/uncalibrated emission mode names."""
+    normalized = mode.lower().replace("-", "_")
+    if normalized not in EMISSION_MODE_CHOICES:
+        raise ValueError(f"Unknown emission mode '{mode}'. Available modes: {', '.join(EMISSION_MODE_CHOICES)}.")
+    return normalized
+
+
+def score_to_probabilities(scores: np.ndarray) -> np.ndarray:
+    """Convert uncalibrated decision scores into pseudo-probability emissions."""
+    scores = np.asarray(scores, dtype=float)
+    if scores.ndim == 1:
+        clipped = np.clip(scores, -50.0, 50.0)
+        positive = 1.0 / (1.0 + np.exp(-clipped))
+        return np.column_stack([1.0 - positive, positive])
+    if scores.ndim != 2:
+        raise ValueError("Decision scores must be one- or two-dimensional.")
+    shifted = scores - scores.max(axis=1, keepdims=True)
+    exp_scores = np.exp(np.clip(shifted, -50.0, 50.0))
+    return exp_scores / exp_scores.sum(axis=1, keepdims=True)
+
+
+def predict_emission_probabilities(model, features: np.ndarray, *, emission_mode: str = "calibrated") -> np.ndarray:
+    """Predict calibrated probabilities or uncalibrated score-derived emissions."""
+    emission_mode = normalize_emission_mode(emission_mode)
+    if emission_mode == "uncalibrated" and hasattr(model, "decision_function"):
+        return score_to_probabilities(model.decision_function(features))
+    if hasattr(model, "predict_proba"):
+        return np.asarray(model.predict_proba(features), dtype=float)
+    if hasattr(model, "decision_function"):
+        return score_to_probabilities(model.decision_function(features))
+    raise ValueError("Decoder does not provide predict_proba or decision_function.")
 
 
 def make_cross_validator(labels: np.ndarray, groups: np.ndarray | None, n_splits: int):

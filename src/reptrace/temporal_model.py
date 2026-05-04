@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 EPSILON = 1e-12
+MODEL_GROUP_COLUMNS = ("decoder", "emission_mode")
 
 
 def _expand_paths(patterns: list[str]) -> list[Path]:
@@ -65,8 +66,11 @@ def read_probability_observations(csv_paths: list[Path]) -> pd.DataFrame:
             frame["subject"] = csv_path.stem
         if "decoder" not in frame.columns:
             frame["decoder"] = "decoder"
+        if "emission_mode" not in frame.columns:
+            frame["emission_mode"] = "calibrated"
         frame["subject"] = frame["subject"].astype(str)
         frame["decoder"] = frame["decoder"].astype(str)
+        frame["emission_mode"] = frame["emission_mode"].astype(str)
         frame["source_file"] = csv_path.name
         frames.append(frame)
     return pd.concat(frames, ignore_index=True)
@@ -87,6 +91,10 @@ def _filter_time_window(frame: pd.DataFrame, time_window: tuple[float, float] | 
 
 def _sequence_key_columns(frame: pd.DataFrame) -> list[str]:
     return [column for column in ("subject", "fold", "sequence_id") if column in frame.columns]
+
+
+def _model_group_columns(frame: pd.DataFrame) -> list[str]:
+    return [column for column in MODEL_GROUP_COLUMNS if column in frame.columns]
 
 
 def _sequences_from_frame(frame: pd.DataFrame, prob_columns: list[str]) -> list[np.ndarray]:
@@ -205,9 +213,9 @@ def _fit_control(
     return rows
 
 
-def _model_row(decoder: str, condition: str, fit: dict[str, float], *, empirical_p_value: float | None = None) -> dict[str, float | str | None]:
+def _model_row(group_values: dict[str, str], condition: str, fit: dict[str, float], *, empirical_p_value: float | None = None) -> dict[str, float | str | None]:
     return {
-        "decoder": decoder,
+        **group_values,
         "condition": condition,
         "n_sequences": int(fit["n_sequences"]),
         "n_observations": int(fit["n_observations"]),
@@ -225,7 +233,7 @@ def _model_row(decoder: str, condition: str, fit: dict[str, float], *, empirical
 
 
 def _control_row(
-    decoder: str,
+    group_values: dict[str, str],
     condition: str,
     fits: list[dict[str, float]],
     *,
@@ -235,7 +243,7 @@ def _control_row(
     gains = frame["persistence_gain_per_observation"].to_numpy()
     empirical_p_value = (1.0 + float(np.sum(gains >= observed_gain))) / (len(gains) + 1.0)
     return {
-        "decoder": decoder,
+        **group_values,
         "condition": condition,
         "n_sequences": int(frame["n_sequences"].iloc[0]),
         "n_observations": int(frame["n_observations"].iloc[0]),
@@ -308,6 +316,7 @@ def build_state_trace(frame: pd.DataFrame, *, stay_probability: float, class_nam
             row = {
                 **metadata,
                 "decoder": str(observation["decoder"]),
+                "emission_mode": str(observation["emission_mode"]) if "emission_mode" in observation else "calibrated",
                 "time": float(observation["time"]),
                 "viterbi_state": state,
                 "viterbi_class": class_names[state],
@@ -340,12 +349,15 @@ def fit_temporal_models(
     rows = []
     state_frames = []
 
-    for decoder, decoder_frame in observations.groupby("decoder", sort=True):
+    group_columns = _model_group_columns(observations)
+    for keys, decoder_frame in observations.groupby(group_columns, sort=True):
+        key_values = keys if isinstance(keys, tuple) else (keys,)
+        group_values = dict(zip(group_columns, map(str, key_values), strict=True))
         class_names = _class_names(decoder_frame, prob_columns)
         effect_frame = _filter_time_window(decoder_frame, effect_window)
         effect_sequences = _sequences_from_frame(effect_frame, prob_columns)
         observed_fit = fit_sticky_switching_model(effect_sequences, stay_grid_size=stay_grid_size)
-        rows.append(_model_row(decoder, "observed_effect", observed_fit))
+        rows.append(_model_row(group_values, "observed_effect", observed_fit))
 
         baseline_frame = _filter_time_window(decoder_frame, baseline_window)
         if not baseline_frame.empty:
@@ -355,7 +367,7 @@ def fit_temporal_models(
                 baseline_sequences = []
             if baseline_sequences:
                 baseline_fit = fit_sticky_switching_model(baseline_sequences, stay_grid_size=stay_grid_size)
-                rows.append(_model_row(decoder, "baseline_window", baseline_fit))
+                rows.append(_model_row(group_values, "baseline_window", baseline_fit))
 
         if n_permutations > 0:
             for offset, control in enumerate(("shuffled_time", "shuffled_label")):
@@ -366,7 +378,7 @@ def fit_temporal_models(
                     random_seed=random_seed + offset,
                     stay_grid_size=stay_grid_size,
                 )
-                rows.append(_control_row(decoder, control, control_fits, observed_gain=observed_fit["persistence_gain_per_observation"]))
+                rows.append(_control_row(group_values, control, control_fits, observed_gain=observed_fit["persistence_gain_per_observation"]))
 
         if out_states is not None:
             state_frames.append(

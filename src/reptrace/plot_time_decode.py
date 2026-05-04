@@ -10,7 +10,17 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from reptrace.results import METRIC_COLUMNS
+from reptrace.results import METRIC_COLUMNS, SUMMARY_GROUP_COLUMNS
+
+
+def _group_columns(frame: pd.DataFrame) -> list[str]:
+    return [column for column in SUMMARY_GROUP_COLUMNS if column in frame.columns]
+
+
+def _group_label(group_name) -> str:
+    if isinstance(group_name, tuple):
+        return " / ".join(map(str, group_name))
+    return str(group_name)
 
 
 def _summary_from_csv(results_csv: Path) -> pd.DataFrame:
@@ -23,20 +33,21 @@ def _summary_from_csv(results_csv: Path) -> pd.DataFrame:
         for metric in METRIC_COLUMNS:
             if f"{metric}_sem" not in summary.columns:
                 summary[f"{metric}_sem"] = 0.0
-        sort_columns = [column for column in ("decoder", "time") if column in summary.columns]
+        sort_columns = [*_group_columns(summary), "time"]
         return summary.sort_values(sort_columns or ["time"])
 
     missing = [metric for metric in METRIC_COLUMNS if metric not in results.columns]
     if missing:
         raise ValueError(f"Results CSV is missing required metric columns: {missing}")
 
-    grouped = results.groupby("time", as_index=False)
+    group_columns = _group_columns(results)
+    grouped = results.groupby([*group_columns, "time"], as_index=False)
     summary = grouped[list(METRIC_COLUMNS)].mean()
     for metric in METRIC_COLUMNS:
         sem = grouped[metric].sem().rename(columns={metric: f"{metric}_sem"})
         summary = summary.merge(sem, on="time")
         summary = summary.rename(columns={metric: f"{metric}_mean"})
-    return summary.sort_values("time")
+    return summary.sort_values([*group_columns, "time"] or ["time"])
 
 
 def plot_time_decode_results(
@@ -53,7 +64,8 @@ def plot_time_decode_results(
         raise ValueError(f"Unknown metrics: {unknown}")
 
     summary = _summary_from_csv(results_csv)
-    plot_groups = list(summary.groupby("decoder", sort=True)) if "decoder" in summary.columns else [(None, summary)]
+    group_columns = _group_columns(summary)
+    plot_groups = list(summary.groupby(group_columns, sort=True)) if group_columns else [(None, summary)]
     n_metrics = len(metrics)
     n_cols = 2 if n_metrics > 1 else 1
     n_rows = (n_metrics + n_cols - 1) // n_cols
@@ -65,7 +77,7 @@ def plot_time_decode_results(
         for group_name, group in plot_groups:
             mean = group[f"{metric}_mean"]
             sem = group[f"{metric}_sem"].fillna(0.0)
-            label = str(group_name) if group_name is not None else metric
+            label = _group_label(group_name) if group_name is not None else metric
             ax.plot(group["time"], mean, label=label)
             ax.fill_between(group["time"], mean - sem, mean + sem, alpha=0.2)
         if metric == "accuracy" and chance is not None:

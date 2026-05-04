@@ -51,3 +51,17 @@ def test_aggregate_time_decode_results_keeps_decoder_groups_separate():
 
     assert aggregated["decoder"].tolist() == ["lda", "lda", "logistic", "logistic"]
     assert aggregated["accuracy_mean"].round(3).tolist() == [0.8, 0.9, 0.7, 0.8]
+
+
+def test_aggregate_time_decode_results_keeps_emission_modes_separate():
+    calibrated = _result_frame("s1")
+    calibrated["decoder"] = "linear_svm"
+    calibrated["emission_mode"] = "calibrated"
+    uncalibrated = _result_frame("s1", offset=0.1)
+    uncalibrated["decoder"] = "linear_svm"
+    uncalibrated["emission_mode"] = "uncalibrated"
+
+    aggregated = aggregate_time_decode_results(pd.concat([calibrated, uncalibrated], ignore_index=True))
+
+    assert aggregated["emission_mode"].tolist() == ["calibrated", "calibrated", "uncalibrated", "uncalibrated"]
+    assert aggregated["accuracy_mean"].round(3).tolist() == [0.7, 0.8, 0.8, 0.9]

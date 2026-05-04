@@ -19,6 +19,8 @@ RepTrace currently provides tools for:
   time, shuffled label, and baseline-window controls;
 - category-conditioned semantic stage summaries for asking whether decoded
   representations unfold in stable temporal stages;
+- calibrated-versus-uncalibrated emission comparisons for state-inference
+  analyses;
 - calibrated classification metrics, including Brier score and expected
   calibration error;
 - calibration-first reports and reliability-bin diagnostics;

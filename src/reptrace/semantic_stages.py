@@ -7,6 +7,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+STAGE_GROUP_COLUMNS = ("decoder", "emission_mode")
+
 
 def _expand_paths(patterns: list[str]) -> list[Path]:
     paths: list[Path] = []
@@ -59,6 +61,8 @@ def read_state_traces(csv_paths: list[Path]) -> pd.DataFrame:
             frame["subject"] = csv_path.stem
         if "decoder" not in frame.columns:
             frame["decoder"] = "decoder"
+        if "emission_mode" not in frame.columns:
+            frame["emission_mode"] = "calibrated"
         if "sequence_id" not in frame.columns:
             if "sample_index" in frame.columns:
                 frame["sequence_id"] = frame["sample_index"]
@@ -66,6 +70,7 @@ def read_state_traces(csv_paths: list[Path]) -> pd.DataFrame:
                 frame["sequence_id"] = np.arange(len(frame))
         frame["subject"] = frame["subject"].astype(str)
         frame["decoder"] = frame["decoder"].astype(str)
+        frame["emission_mode"] = frame["emission_mode"].astype(str)
         frame["source_file"] = csv_path.name
         frames.append(frame)
     return pd.concat(frames, ignore_index=True)
@@ -74,6 +79,10 @@ def read_state_traces(csv_paths: list[Path]) -> pd.DataFrame:
 def _sequence_keys(frame: pd.DataFrame) -> pd.Series:
     key_columns = [column for column in ("subject", "fold", "sequence_id") if column in frame.columns]
     return frame[key_columns].astype(str).agg("|".join, axis=1)
+
+
+def _stage_group_columns(frame: pd.DataFrame) -> list[str]:
+    return [column for column in STAGE_GROUP_COLUMNS if column in frame.columns]
 
 
 def _add_true_class_alignment(frame: pd.DataFrame, columns: list[str], state_names: list[str]) -> pd.DataFrame:
@@ -104,7 +113,7 @@ def summarize_category_timecourse(state_traces: pd.DataFrame) -> tuple[pd.DataFr
 
     aligned = _add_true_class_alignment(state_traces, columns, state_names)
     summary = (
-        aligned.groupby(["decoder", "true_class", "time"], as_index=False)
+        aligned.groupby([*_stage_group_columns(aligned), "true_class", "time"], as_index=False)
         .agg(
             n_observations=("time", "size"),
             n_sequences=("sequence_key", "nunique"),
@@ -113,7 +122,7 @@ def summarize_category_timecourse(state_traces: pd.DataFrame) -> tuple[pd.DataFr
             viterbi_match_rate=("viterbi_matches_true_class", "mean"),
             viterbi_posterior_mean=("viterbi_posterior", "mean") if "viterbi_posterior" in aligned.columns else ("posterior_true_class", "mean"),
         )
-        .sort_values(["decoder", "true_class", "time"])
+        .sort_values([*_stage_group_columns(aligned), "true_class", "time"])
         .reset_index(drop=True)
     )
     return summary, state_names
@@ -126,7 +135,10 @@ def summarize_dominant_timecourse(state_traces: pd.DataFrame) -> pd.DataFrame:
     frame = state_traces.copy()
     frame["sequence_key"] = _sequence_keys(frame)
     rows = []
-    for (decoder, time), group in frame.groupby(["decoder", "time"], sort=True):
+    group_columns = _stage_group_columns(frame)
+    for keys, group in frame.groupby([*group_columns, "time"], sort=True):
+        key_values = keys if isinstance(keys, tuple) else (keys,)
+        group_values = dict(zip([*group_columns, "time"], key_values, strict=True))
         means = group[columns].mean().to_numpy(dtype=float)
         order = np.argsort(means)
         dominant_index = int(order[-1])
@@ -134,9 +146,10 @@ def summarize_dominant_timecourse(state_traces: pd.DataFrame) -> pd.DataFrame:
         dominant_class = state_names[dominant_index]
         rows.append(
             {
-                "decoder": decoder,
+                "decoder": group_values.get("decoder", "decoder"),
+                "emission_mode": group_values.get("emission_mode", "calibrated"),
                 "true_class": dominant_class,
-                "time": float(time),
+                "time": float(group_values["time"]),
                 "n_observations": len(group),
                 "n_sequences": group["sequence_key"].nunique(),
                 "posterior_true_class_mean": float(means[dominant_index]),
@@ -146,7 +159,10 @@ def summarize_dominant_timecourse(state_traces: pd.DataFrame) -> pd.DataFrame:
                 "posterior_margin": float(means[dominant_index] - runner_up) if len(order) > 1 else float("nan"),
             }
         )
-    return pd.DataFrame(rows).sort_values(["decoder", "true_class", "time"]).reset_index(drop=True)
+    result = pd.DataFrame(rows)
+    if result.empty:
+        return result
+    return result.sort_values([*_stage_group_columns(result), "true_class", "time"]).reset_index(drop=True)
 
 
 def _contiguous_segments(mask: np.ndarray) -> list[tuple[int, int]]:
@@ -172,7 +188,10 @@ def detect_stable_stages(
 ) -> pd.DataFrame:
     """Detect contiguous semantic stages from a category-conditioned time summary."""
     rows = []
-    for (decoder, true_class), group in time_summary.sort_values("time").groupby(["decoder", "true_class"], sort=True):
+    group_columns = [*_stage_group_columns(time_summary), "true_class"]
+    for keys, group in time_summary.sort_values("time").groupby(group_columns, sort=True):
+        key_values = keys if isinstance(keys, tuple) else (keys,)
+        group_values = dict(zip(group_columns, key_values, strict=True))
         stable = (
             (group["posterior_true_class_mean"].to_numpy(dtype=float) >= posterior_threshold)
             & (group["viterbi_match_rate"].to_numpy(dtype=float) >= match_threshold)
@@ -188,8 +207,9 @@ def detect_stable_stages(
             peak_row = segment.loc[segment["posterior_true_class_mean"].idxmax()]
             rows.append(
                 {
-                    "decoder": decoder,
-                    "semantic_class": true_class,
+                    "decoder": group_values.get("decoder", "decoder"),
+                    "emission_mode": group_values.get("emission_mode", "calibrated"),
+                    "semantic_class": group_values["true_class"],
                     "start_time": start_time,
                     "stop_time": stop_time,
                     "duration": duration,
@@ -237,20 +257,20 @@ def build_stage_report(
     else:
         lines.extend(
             [
-                "| Decoder | Semantic class | Start (s) | Stop (s) | Duration (s) | Mean posterior | Mean match | Peak time (s) |",
-                "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+                "| Decoder | Emission mode | Semantic class | Start (s) | Stop (s) | Duration (s) | Mean posterior | Mean match | Peak time (s) |",
+                "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
             ]
         )
         for row in stages.itertuples(index=False):
             lines.append(
-                f"| {row.decoder} | {row.semantic_class} | {row.start_time:.3f} | {row.stop_time:.3f} | "
+                f"| {row.decoder} | {row.emission_mode} | {row.semantic_class} | {row.start_time:.3f} | {row.stop_time:.3f} | "
                 f"{row.duration:.3f} | {row.mean_posterior_true_class:.3f} | {row.mean_viterbi_match_rate:.3f} | {row.peak_time:.3f} |"
             )
 
     if not time_summary.empty:
         peaks = (
-            time_summary.loc[time_summary.groupby(["decoder", "true_class"])["posterior_true_class_mean"].idxmax()]
-            .sort_values(["decoder", "true_class"])
+            time_summary.loc[time_summary.groupby([*_stage_group_columns(time_summary), "true_class"])["posterior_true_class_mean"].idxmax()]
+            .sort_values([*_stage_group_columns(time_summary), "true_class"])
             .reset_index(drop=True)
         )
         lines.extend(
@@ -258,12 +278,12 @@ def build_stage_report(
                 "",
                 "## Category Peaks",
                 "",
-                "| Decoder | Semantic class | Peak time (s) | Peak posterior | Match rate |",
-                "| --- | --- | ---: | ---: | ---: |",
+                "| Decoder | Emission mode | Semantic class | Peak time (s) | Peak posterior | Match rate |",
+                "| --- | --- | --- | ---: | ---: | ---: |",
             ]
         )
         for row in peaks.itertuples(index=False):
-            lines.append(f"| {row.decoder} | {row.true_class} | {row.time:.3f} | {row.posterior_true_class_mean:.3f} | {row.viterbi_match_rate:.3f} |")
+            lines.append(f"| {row.decoder} | {row.emission_mode} | {row.true_class} | {row.time:.3f} | {row.posterior_true_class_mean:.3f} | {row.viterbi_match_rate:.3f} |")
 
     lines.extend(
         [
