@@ -15,6 +15,8 @@ DEFAULT_PATTERNS = (
     "reliability.png",
     "report.md",
     "calibration_report.md",
+    "paired_stats.csv",
+    "paired_stats.md",
     "reliability_bins.csv",
     "inference_*_time.csv",
     "inference_*_clusters.csv",

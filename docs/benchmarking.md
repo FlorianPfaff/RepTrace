@@ -282,6 +282,16 @@ python -m reptrace.plot_calibration \
   --title "NOD animate/inanimate decoder calibration"
 ```
 
+Run paired subject-level decoder statistics:
+
+```bash
+python -m reptrace.paired_stats \
+  "results/nod_animate_decoders_first5/sub-*_time_decode.csv" \
+  --out-csv results/nod_animate_decoders_first5/paired_stats.csv \
+  --out-report results/nod_animate_decoders_first5/paired_stats.md \
+  --chance 0.5
+```
+
 Run the full 19-subject decoder comparison on a self-hosted GitHub Actions
 runner:
 

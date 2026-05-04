@@ -86,6 +86,7 @@ jobs:
           py -${{ inputs.python_version }} -m poetry run python -m reptrace.report "%REPTRACE_OUTPUT_DIR%\summary.csv" "%REPTRACE_OUTPUT_DIR%\sub-*_time_decode.csv" --out "%REPTRACE_OUTPUT_DIR%\report.md" --chance 0.5
           py -${{ inputs.python_version }} -m poetry run python -m reptrace.calibration "%REPTRACE_OUTPUT_DIR%\summary.csv" "%REPTRACE_OUTPUT_DIR%\calibration\*_calibration_bins.csv" --out-report "%REPTRACE_OUTPUT_DIR%\calibration_report.md" --out-bins "%REPTRACE_OUTPUT_DIR%\reliability_bins.csv"
           py -${{ inputs.python_version }} -m poetry run python -m reptrace.plot_calibration "%REPTRACE_OUTPUT_DIR%\reliability_bins.csv" --out "%REPTRACE_OUTPUT_DIR%\reliability.png" --time-window 0.1 0.8 --title "NOD animate/inanimate decoder calibration"
+          py -${{ inputs.python_version }} -m poetry run python -m reptrace.paired_stats "%REPTRACE_OUTPUT_DIR%\sub-*_time_decode.csv" --out-csv "%REPTRACE_OUTPUT_DIR%\paired_stats.csv" --out-report "%REPTRACE_OUTPUT_DIR%\paired_stats.md" --chance 0.5 --n-permutations "${{ inputs.n_permutations }}"
           for %%D in (logistic lda linear_svm) do (
             py -${{ inputs.python_version }} -m poetry run python -m reptrace.inference "%REPTRACE_OUTPUT_DIR%\sub-*_%%D_time_decode.csv" --chance 0.5 --n-permutations "${{ inputs.n_permutations }}" --out-time "%REPTRACE_OUTPUT_DIR%\inference_%%D_time.csv" --out-clusters "%REPTRACE_OUTPUT_DIR%\inference_%%D_clusters.csv"
           )
@@ -103,6 +104,8 @@ jobs:
             ${{ inputs.output_dir }}/reliability.png
             ${{ inputs.output_dir }}/report.md
             ${{ inputs.output_dir }}/calibration_report.md
+            ${{ inputs.output_dir }}/paired_stats.csv
+            ${{ inputs.output_dir }}/paired_stats.md
             ${{ inputs.output_dir }}/reliability_bins.csv
             ${{ inputs.output_dir }}/inference_*_time.csv
             ${{ inputs.output_dir }}/inference_*_clusters.csv

@@ -18,6 +18,7 @@ nav:
       - Inference: reference/inference.md
       - Metadata: reference/metadata.md
       - Metrics: reference/metrics.md
+      - Paired Statistics: reference/paired-stats.md
       - Results: reference/results.md
       - Plotting: reference/plotting.md
       - Report: reference/report.md
