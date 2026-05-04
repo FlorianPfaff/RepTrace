@@ -290,6 +290,16 @@ NOD-EEG subjects, then uploads only compact summary, calibration, and inference
 artifacts. Use an absolute `data_root` when the self-hosted runner keeps the NOD
 files outside the repository workspace.
 
+After downloading or locating the workflow output directory, export only
+paper-safe artifacts into the paper repository:
+
+```bash
+python scripts/export_paper_results.py \
+  results/nod_animate_decoders_all \
+  ../2026-05-RepTrace-Paper/results/nod_animate_decoders_all \
+  --max-mb 50
+```
+
 ## Acceptance Target
 
 The first useful milestone is not just above-chance accuracy. The benchmark
