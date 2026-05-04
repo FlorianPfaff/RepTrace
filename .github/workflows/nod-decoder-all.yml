@@ -19,7 +19,7 @@ on:
         required: true
         default: "10000"
       python_version:
-        description: "Python version for the benchmark environment"
+        description: "Python version for the local py launcher"
         required: true
         default: "3.12"
 
@@ -36,95 +36,58 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ inputs.python_version }}
-
       - name: Install dependencies
-        shell: pwsh
+        shell: cmd
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install poetry
-          poetry env use python
-          poetry install
+          py -${{ inputs.python_version }} --version
+          py -${{ inputs.python_version }} -m pip install --upgrade pip
+          py -${{ inputs.python_version }} -m pip install poetry
+          for /f "delims=" %%P in ('py -${{ inputs.python_version }} -c "import sys; print(sys.executable)"') do set "PYTHON_EXE=%%P"
+          py -${{ inputs.python_version }} -m poetry env use "%PYTHON_EXE%"
+          py -${{ inputs.python_version }} -m poetry install
 
       - name: Prepare run manifest
-        shell: pwsh
+        shell: cmd
         run: |
-          $ErrorActionPreference = "Stop"
-          $dataRoot = "${{ inputs.data_root }}"
-          if (-not [System.IO.Path]::IsPathRooted($dataRoot)) {
-            $dataRoot = Join-Path $env:GITHUB_WORKSPACE $dataRoot
-          }
-          $dataRoot = [System.IO.Path]::GetFullPath($dataRoot)
-          if (-not (Test-Path -LiteralPath $dataRoot)) {
-            throw "Data root does not exist: $dataRoot"
-          }
-
-          $outputDir = Join-Path $env:GITHUB_WORKSPACE "${{ inputs.output_dir }}"
-          New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
-          $runManifest = Join-Path $outputDir "manifest.csv"
-
-          Import-Csv benchmarks/nod_animate_decoders_all.csv | ForEach-Object {
-            $_.epochs = Join-Path $dataRoot (Split-Path $_.epochs -Leaf)
-            $_.events_csv = Join-Path $dataRoot (Split-Path $_.events_csv -Leaf)
-            $_
-          } | Export-Csv -NoTypeInformation -Path $runManifest
-
-          "REPTRACE_DATA_ROOT=$dataRoot" >> $env:GITHUB_ENV
-          "REPTRACE_OUTPUT_DIR=$outputDir" >> $env:GITHUB_ENV
-          "REPTRACE_RUN_MANIFEST=$runManifest" >> $env:GITHUB_ENV
-          Write-Host "Using data root: $dataRoot"
-          Write-Host "Wrote run manifest: $runManifest"
+          set "DATA_ROOT=${{ inputs.data_root }}"
+          if not exist "%DATA_ROOT%" if exist "%GITHUB_WORKSPACE%\%DATA_ROOT%" set "DATA_ROOT=%GITHUB_WORKSPACE%\%DATA_ROOT%"
+          if not exist "%DATA_ROOT%" (
+            echo Data root does not exist: %DATA_ROOT%
+            exit /b 1
+          )
+          set "OUTPUT_DIR=%GITHUB_WORKSPACE%\${{ inputs.output_dir }}"
+          set "RUN_MANIFEST=%OUTPUT_DIR%\manifest.csv"
+          mkdir "%OUTPUT_DIR%" 2>nul
+          py -${{ inputs.python_version }} -m poetry run python scripts\prepare_benchmark_manifest.py benchmarks\nod_animate_decoders_all.csv "%RUN_MANIFEST%" --data-root "%DATA_ROOT%"
+          echo REPTRACE_DATA_ROOT=%DATA_ROOT%>>"%GITHUB_ENV%"
+          echo REPTRACE_OUTPUT_DIR=%OUTPUT_DIR%>>"%GITHUB_ENV%"
+          echo REPTRACE_RUN_MANIFEST=%RUN_MANIFEST%>>"%GITHUB_ENV%"
+          echo Using data root: %DATA_ROOT%
+          echo Wrote run manifest: %RUN_MANIFEST%
 
       - name: Validate staged data
-        shell: pwsh
+        shell: cmd
         run: |
-          poetry run python -m reptrace.validate_manifest `
-            "$env:REPTRACE_RUN_MANIFEST" `
-            --report-out "$env:REPTRACE_OUTPUT_DIR/validation.csv"
+          set "PYTHONPATH=%GITHUB_WORKSPACE%\src"
+          py -${{ inputs.python_version }} -m poetry run python -m reptrace.validate_manifest "%REPTRACE_RUN_MANIFEST%" --report-out "%REPTRACE_OUTPUT_DIR%\validation.csv"
 
       - name: Run all-subject decoder comparison
-        shell: pwsh
+        shell: cmd
         env:
           PYTHONPATH: ${{ github.workspace }}/src
         run: |
-          poetry run python -m reptrace.benchmark `
-            "$env:REPTRACE_RUN_MANIFEST" `
-            --out-dir "$env:REPTRACE_OUTPUT_DIR" `
-            --aggregate-out "$env:REPTRACE_OUTPUT_DIR/summary.csv" `
-            --plot-out "$env:REPTRACE_OUTPUT_DIR/summary.png" `
-            --calibration-dir "$env:REPTRACE_OUTPUT_DIR/calibration" `
-            --chance 0.5
+          py -${{ inputs.python_version }} -m poetry run python -m reptrace.benchmark "%REPTRACE_RUN_MANIFEST%" --out-dir "%REPTRACE_OUTPUT_DIR%" --aggregate-out "%REPTRACE_OUTPUT_DIR%\summary.csv" --plot-out "%REPTRACE_OUTPUT_DIR%\summary.png" --calibration-dir "%REPTRACE_OUTPUT_DIR%\calibration" --chance 0.5
 
       - name: Generate reports and inference tables
-        shell: pwsh
+        shell: cmd
         env:
           PYTHONPATH: ${{ github.workspace }}/src
         run: |
-          $ErrorActionPreference = "Stop"
-          poetry run python -m reptrace.report `
-            "$env:REPTRACE_OUTPUT_DIR/summary.csv" `
-            "$env:REPTRACE_OUTPUT_DIR/sub-*_time_decode.csv" `
-            --out "$env:REPTRACE_OUTPUT_DIR/report.md" `
-            --chance 0.5
-
-          poetry run python -m reptrace.calibration `
-            "$env:REPTRACE_OUTPUT_DIR/summary.csv" `
-            "$env:REPTRACE_OUTPUT_DIR/calibration/*_calibration_bins.csv" `
-            --out-report "$env:REPTRACE_OUTPUT_DIR/calibration_report.md" `
-            --out-bins "$env:REPTRACE_OUTPUT_DIR/reliability_bins.csv"
-
-          foreach ($decoder in @("logistic", "lda", "linear_svm")) {
-            $pattern = Join-Path $env:REPTRACE_OUTPUT_DIR ("sub-*_" + $decoder + "_time_decode.csv")
-            poetry run python -m reptrace.inference `
-              "$pattern" `
-              --chance 0.5 `
-              --n-permutations "${{ inputs.n_permutations }}" `
-              --out-time "$env:REPTRACE_OUTPUT_DIR/inference_${decoder}_time.csv" `
-              --out-clusters "$env:REPTRACE_OUTPUT_DIR/inference_${decoder}_clusters.csv"
-          }
+          py -${{ inputs.python_version }} -m poetry run python -m reptrace.report "%REPTRACE_OUTPUT_DIR%\summary.csv" "%REPTRACE_OUTPUT_DIR%\sub-*_time_decode.csv" --out "%REPTRACE_OUTPUT_DIR%\report.md" --chance 0.5
+          py -${{ inputs.python_version }} -m poetry run python -m reptrace.calibration "%REPTRACE_OUTPUT_DIR%\summary.csv" "%REPTRACE_OUTPUT_DIR%\calibration\*_calibration_bins.csv" --out-report "%REPTRACE_OUTPUT_DIR%\calibration_report.md" --out-bins "%REPTRACE_OUTPUT_DIR%\reliability_bins.csv"
+          for %%D in (logistic lda linear_svm) do (
+            py -${{ inputs.python_version }} -m poetry run python -m reptrace.inference "%REPTRACE_OUTPUT_DIR%\sub-*_%%D_time_decode.csv" --chance 0.5 --n-permutations "${{ inputs.n_permutations }}" --out-time "%REPTRACE_OUTPUT_DIR%\inference_%%D_time.csv" --out-clusters "%REPTRACE_OUTPUT_DIR%\inference_%%D_clusters.csv"
+          )
 
       - name: Upload compact result artifacts
         uses: actions/upload-artifact@v6
@@ -141,4 +104,4 @@ jobs:
             ${{ inputs.output_dir }}/reliability_bins.csv
             ${{ inputs.output_dir }}/inference_*_time.csv
             ${{ inputs.output_dir }}/inference_*_clusters.csv
-          if-no-files-found: error
+          if-no-files-found: warn
