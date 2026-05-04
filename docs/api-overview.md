@@ -16,4 +16,4 @@ RepTrace currently exposes these small modules:
 - `reptrace.report` creates compact Markdown reports from benchmark outputs.
 - `reptrace.validate_manifest` checks staged files and metadata before decoding.
 - `reptrace.mne_time_decode` provides the MNE epochs decoding command-line
-  workflow.
+  workflow, including optional held-out probability observation exports.

@@ -13,6 +13,8 @@ sequences.
 RepTrace currently provides tools for:
 
 - time-resolved decoding from MNE `Epochs` files;
+- held-out trial/time probability observation exports for downstream state
+  models;
 - calibrated classification metrics, including Brier score and expected
   calibration error;
 - calibration-first reports and reliability-bin diagnostics;
@@ -63,7 +65,8 @@ python -m reptrace.mne_time_decode \
   --metadata-csv path/to/sub-01_events.csv \
   --label-column stim_is_animate \
   --group-column session \
-  --out results/nod_sub-01_animate.csv
+  --out results/nod_sub-01_animate.csv \
+  --observations-out results/nod_sub-01_animate_observations.csv
 ```
 
 Plot the resulting time course:

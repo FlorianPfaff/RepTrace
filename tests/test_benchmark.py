@@ -20,6 +20,27 @@ def _fake_decode(**kwargs):
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(out_path, index=False)
+    observation_out_path = kwargs.get("observation_out_path")
+    if observation_out_path is not None:
+        observation_out_path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            {
+                "subject": [kwargs.get("subject", "sub-01")],
+                "fold": [0],
+                "decoder": [kwargs.get("decoder", "logistic")],
+                "time": [0.1],
+                "sample_index": [0],
+                "sequence_id": [0],
+                "true_label": [1],
+                "true_class": ["positive"],
+                "predicted_label": [1],
+                "predicted_class": ["positive"],
+                "probability_true_class": [0.7],
+                "confidence": [0.7],
+                "prob_class_0": [0.3],
+                "prob_class_1": [0.7],
+            }
+        ).to_csv(observation_out_path, index=False)
     return frame
 
 
@@ -123,6 +144,33 @@ def test_run_benchmark_manifest_passes_calibration_output_paths(tmp_path: Path, 
     assert run.calibration_csvs == [calls[0]["calibration_out_path"]]
 
 
+def test_run_benchmark_manifest_passes_observation_output_paths(tmp_path: Path, monkeypatch):
+    manifest = tmp_path / "manifest.csv"
+    manifest.write_text(
+        "subject,epochs,metadata_csv,label_column,decoder\n"
+        "sub-01,data/sub-01_epo.fif,data/sub-01_metadata.csv,condition,logistic\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_decode(**kwargs):
+        calls.append(kwargs)
+        return _fake_decode(**kwargs)
+
+    monkeypatch.setattr("reptrace.benchmark.run_time_resolved_decode", fake_decode)
+
+    run = run_benchmark_manifest(
+        manifest,
+        out_dir=tmp_path / "results",
+        observation_dir=tmp_path / "results" / "observations",
+    )
+
+    assert calls[0]["observation_out_path"] == tmp_path / "results" / "observations" / "sub-01_logistic_observations.csv"
+    assert calls[0]["subject"] == "sub-01"
+    assert run.observation_csvs == [calls[0]["observation_out_path"]]
+    assert pd.read_csv(run.observation_csvs[0])["prob_class_1"].tolist() == [0.7]
+
+
 def test_run_benchmark_manifest_resume_skips_complete_existing_rows(tmp_path: Path, monkeypatch):
     manifest = tmp_path / "manifest.csv"
     manifest.write_text(
@@ -201,3 +249,44 @@ def test_run_benchmark_manifest_resume_reruns_when_calibration_is_missing(tmp_pa
     assert len(calls) == 1
     assert run.skipped_existing == 0
     assert calls[0]["calibration_out_path"] == tmp_path / "results" / "calibration" / "sub-01_logistic_calibration_bins.csv"
+
+
+def test_run_benchmark_manifest_resume_reruns_when_observations_are_missing(tmp_path: Path, monkeypatch):
+    manifest = tmp_path / "manifest.csv"
+    manifest.write_text(
+        "subject,epochs,metadata_csv,label_column,decoder\n"
+        "sub-01,data/sub-01_epo.fif,data/sub-01_metadata.csv,condition,logistic\n",
+        encoding="utf-8",
+    )
+    existing = tmp_path / "results" / "sub-01_logistic_time_decode.csv"
+    existing.parent.mkdir()
+    pd.DataFrame(
+        {
+            "subject": ["sub-01"],
+            "fold": [0],
+            "decoder": ["logistic"],
+            "time": [0.1],
+            "accuracy": [0.6],
+            "log_loss": [0.5],
+            "brier": [0.3],
+            "ece": [0.1],
+        }
+    ).to_csv(existing, index=False)
+    calls = []
+
+    def fake_decode(**kwargs):
+        calls.append(kwargs)
+        return _fake_decode(**kwargs)
+
+    monkeypatch.setattr("reptrace.benchmark.run_time_resolved_decode", fake_decode)
+
+    run = run_benchmark_manifest(
+        manifest,
+        out_dir=tmp_path / "results",
+        observation_dir=tmp_path / "results" / "observations",
+        resume=True,
+    )
+
+    assert len(calls) == 1
+    assert run.skipped_existing == 0
+    assert calls[0]["observation_out_path"] == tmp_path / "results" / "observations" / "sub-01_logistic_observations.csv"

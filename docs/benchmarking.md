@@ -33,11 +33,20 @@ python -m reptrace.mne_time_decode \
   --tmax 0.8 \
   --window-ms 20 \
   --step-ms 10 \
-  --out results/nod_sub-01_animate.csv
+  --out results/nod_sub-01_animate.csv \
+  --observations-out results/nod_sub-01_animate_observations.csv
 ```
 
 The output CSV contains fold-wise accuracy, log loss, Brier score, and expected
 calibration error for each time window.
+
+The optional observations CSV keeps the held-out decoder probabilities before
+they are reduced to accuracy or calibration summaries. Each row is one
+trial/time-window observation with the fold, time, sample index, true class,
+predicted class, confidence, probability assigned to the true class, and one
+`prob_class_*` column per class. This is the output to use when treating decoder
+traces as probabilistic evidence streams for HMMs or other temporal state
+models.
 
 Plot the single-subject result:
 
@@ -83,6 +92,7 @@ python -m reptrace.benchmark \
   --out-dir results/nod_animate_sub01 \
   --aggregate-out results/nod_animate_sub01_summary.csv \
   --plot-out results/nod_animate_sub01_summary.png \
+  --observation-dir results/nod_animate_sub01/observations \
   --chance 0.5
 ```
 
@@ -387,3 +397,8 @@ compared across subjects, sessions, and decoder variants.
 For interrupted runs, rerun the same command with `--resume`. RepTrace will keep
 complete existing rows, regenerate missing rows, and rebuild the aggregate
 summary and plot from the combined output set.
+
+When `--observation-dir` is requested, resume mode also requires the matching
+subject observation CSV before skipping a manifest row. This prevents a run from
+appearing complete when metric summaries exist but the probability traces needed
+for downstream state modeling are missing.

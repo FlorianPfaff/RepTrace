@@ -22,6 +22,7 @@ class BenchmarkRun:
     aggregate_csv: Path | None
     plot_path: Path | None
     calibration_csvs: list[Path]
+    observation_csvs: list[Path]
     skipped_existing: int = 0
 
 
@@ -133,6 +134,7 @@ def run_benchmark_manifest(
     default_decoder: str = "logistic",
     calibration_dir: Path | None = None,
     calibration_bins: int = 10,
+    observation_dir: Path | None = None,
     resume: bool = False,
 ) -> BenchmarkRun:
     """Run a manifest-defined benchmark and optionally aggregate and plot results."""
@@ -144,6 +146,7 @@ def run_benchmark_manifest(
     out_dir.mkdir(parents=True, exist_ok=True)
     result_csvs: list[Path] = []
     calibration_csvs: list[Path] = []
+    observation_csvs: list[Path] = []
     skipped_existing = 0
 
     for _, row in manifest.iterrows():
@@ -163,11 +166,21 @@ def run_benchmark_manifest(
         calibration_out_csv = _resolve_path(_string_value(row, "calibration_out_csv"), manifest_dir)
         if calibration_out_csv is None and calibration_dir is not None:
             calibration_out_csv = calibration_dir / f"{_decoder_output_stem(subject, decoder, 'decoder' in manifest.columns)}_calibration_bins.csv"
+        observation_out_csv = _resolve_path(_string_value(row, "observation_out_csv"), manifest_dir)
+        if observation_out_csv is None and observation_dir is not None:
+            observation_out_csv = observation_dir / f"{_decoder_output_stem(subject, decoder, 'decoder' in manifest.columns)}_observations.csv"
 
-        if resume and _usable_file(output_csv) and (calibration_out_csv is None or _usable_file(calibration_out_csv)):
+        if (
+            resume
+            and _usable_file(output_csv)
+            and (calibration_out_csv is None or _usable_file(calibration_out_csv))
+            and (observation_out_csv is None or _usable_file(observation_out_csv))
+        ):
             result_csvs.append(output_csv)
             if calibration_out_csv is not None:
                 calibration_csvs.append(calibration_out_csv)
+            if observation_out_csv is not None:
+                observation_csvs.append(observation_out_csv)
             skipped_existing += 1
             continue
 
@@ -188,9 +201,13 @@ def run_benchmark_manifest(
             decoder=decoder,
             calibration_out_path=calibration_out_csv,
             calibration_bins=_int_value(row, "calibration_bins", calibration_bins),
+            observation_out_path=observation_out_csv,
+            subject=subject,
         )
         if calibration_out_csv is not None:
             calibration_csvs.append(calibration_out_csv)
+        if observation_out_csv is not None:
+            observation_csvs.append(observation_out_csv)
         if "subject" not in results.columns:
             results.insert(0, "subject", subject)
         else:
@@ -219,6 +236,7 @@ def run_benchmark_manifest(
         aggregate_csv=aggregate_path,
         plot_path=plot_path,
         calibration_csvs=calibration_csvs,
+        observation_csvs=observation_csvs,
         skipped_existing=skipped_existing,
     )
 
@@ -244,6 +262,7 @@ def main() -> None:
     parser.add_argument("--decoder", choices=DECODER_CHOICES, default="logistic")
     parser.add_argument("--calibration-dir", type=Path)
     parser.add_argument("--calibration-bins", type=int, default=10)
+    parser.add_argument("--observation-dir", type=Path, help="Optional directory for held-out trial/time probability observation CSVs.")
     parser.add_argument(
         "--resume",
         action="store_true",
@@ -269,6 +288,7 @@ def main() -> None:
         default_decoder=args.decoder,
         calibration_dir=args.calibration_dir,
         calibration_bins=args.calibration_bins,
+        observation_dir=args.observation_dir,
         resume=args.resume,
     )
     if run.skipped_existing:
@@ -280,6 +300,8 @@ def main() -> None:
         print(f"Wrote plot: {run.plot_path}")
     if run.calibration_csvs:
         print(f"Wrote {len(run.calibration_csvs)} calibration bin file(s).")
+    if run.observation_csvs:
+        print(f"Wrote {len(run.observation_csvs)} probability observation file(s).")
 
 
 if __name__ == "__main__":
