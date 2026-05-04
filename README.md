@@ -17,6 +17,8 @@ RepTrace currently provides tools for:
   models;
 - conservative sticky switching models for probability traces with shuffled
   time, shuffled label, and baseline-window controls;
+- category-conditioned semantic stage summaries for asking whether decoded
+  representations unfold in stable temporal stages;
 - calibrated classification metrics, including Brier score and expected
   calibration error;
 - calibration-first reports and reliability-bin diagnostics;

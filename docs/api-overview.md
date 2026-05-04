@@ -10,6 +10,8 @@ RepTrace currently exposes these small modules:
 - `reptrace.decoding` provides cross-validation and baseline decoder helpers.
 - `reptrace.metadata` provides simple metadata labeling helpers.
 - `reptrace.results` aggregates fold- and subject-level result CSV files.
+- `reptrace.semantic_stages` summarizes category-conditioned state traces into
+  stable temporal stage candidates.
 - `reptrace.temporal_model` fits conservative sticky switching models to
   held-out probability observations.
 - `reptrace.plot_time_decode` plots raw or aggregated time-resolved metrics.

@@ -68,6 +68,27 @@ shuffle time order, shuffle probability-label columns, and fit the same model in
 the pre-stimulus baseline window. The optional state trace CSV contains Viterbi
 states and posterior state probabilities for downstream sequence analyses.
 
+Ask the first NOD neuroscience question from the state traces:
+
+```bash
+python -m reptrace.semantic_stages \
+  results/nod_sub-01_animate_state_trace.csv \
+  --out-time results/nod_sub-01_animate_semantic_stage_time.csv \
+  --out-stages results/nod_sub-01_animate_semantic_stages.csv \
+  --out-report results/nod_sub-01_animate_semantic_stages.md \
+  --posterior-threshold 0.6 \
+  --match-threshold 0.6 \
+  --min-duration 0.04
+```
+
+This asks whether the decoded semantic category for each trial becomes a stable
+latent state over contiguous time ranges. For NOD this corresponds to category
+staging, such as animate or inanimate evidence emerging over a post-stimulus
+interval. For navigation or planning data, use the same output shape with
+spatial bins or task states in place of semantic classes; the resulting stable
+stages become candidate trajectory segments that still need the temporal-model
+controls above.
+
 Plot the single-subject result:
 
 ```bash
@@ -432,4 +453,14 @@ python -m reptrace.temporal_model \
   --out-summary results/nod_animate_all/temporal_model.csv \
   --out-states results/nod_animate_all/state_trace.csv \
   --n-permutations 100
+```
+
+Then summarize category-conditioned stages:
+
+```bash
+python -m reptrace.semantic_stages \
+  results/nod_animate_all/state_trace.csv \
+  --out-time results/nod_animate_all/semantic_stage_time.csv \
+  --out-stages results/nod_animate_all/semantic_stages.csv \
+  --out-report results/nod_animate_all/semantic_stages.md
 ```
