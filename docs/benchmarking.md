@@ -168,6 +168,42 @@ This larger run is the minimum useful scale for subject-level statistical
 testing. The 5-subject pilot is useful for smoke testing and early signal
 checking; paper-facing claims should use the full staged manifest.
 
+## Decoder Comparison
+
+RepTrace supports standard probability-producing decoders with the `decoder`
+manifest column or `--decoder` CLI option:
+
+- `logistic`: balanced multinomial logistic regression;
+- `lda`: linear discriminant analysis;
+- `linear_svm`: calibrated balanced linear support vector machine.
+
+Run the first-five-subject decoder comparison:
+
+```bash
+python -m reptrace.benchmark \
+  benchmarks/nod_animate_decoders_first5.csv \
+  --out-dir results/nod_animate_decoders_first5 \
+  --aggregate-out results/nod_animate_decoders_first5/summary.csv \
+  --plot-out results/nod_animate_decoders_first5/summary.png \
+  --chance 0.5
+```
+
+When a manifest contains a `decoder` column, result files are named like
+`sub-01_logistic_time_decode.csv`, and aggregate summaries preserve the
+`decoder` column rather than averaging decoders together.
+
+Generate a decoder comparison report:
+
+```bash
+python -m reptrace.report \
+  results/nod_animate_decoders_first5/summary.csv \
+  --out results/nod_animate_decoders_first5/report.md
+```
+
+For decoder comparisons, the report includes both raw effect-window accuracy
+and effect minus baseline-window accuracy. The baseline-corrected value is the
+more relevant paper-facing number when a decoder shows pre-stimulus bias.
+
 ## Acceptance Target
 
 The first useful milestone is not just above-chance accuracy. The benchmark

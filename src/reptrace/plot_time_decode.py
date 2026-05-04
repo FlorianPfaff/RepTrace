@@ -23,7 +23,8 @@ def _summary_from_csv(results_csv: Path) -> pd.DataFrame:
         for metric in METRIC_COLUMNS:
             if f"{metric}_sem" not in summary.columns:
                 summary[f"{metric}_sem"] = 0.0
-        return summary.sort_values("time")
+        sort_columns = [column for column in ("decoder", "time") if column in summary.columns]
+        return summary.sort_values(sort_columns or ["time"])
 
     missing = [metric for metric in METRIC_COLUMNS if metric not in results.columns]
     if missing:
@@ -52,6 +53,7 @@ def plot_time_decode_results(
         raise ValueError(f"Unknown metrics: {unknown}")
 
     summary = _summary_from_csv(results_csv)
+    plot_groups = list(summary.groupby("decoder", sort=True)) if "decoder" in summary.columns else [(None, summary)]
     n_metrics = len(metrics)
     n_cols = 2 if n_metrics > 1 else 1
     n_rows = (n_metrics + n_cols - 1) // n_cols
@@ -60,10 +62,12 @@ def plot_time_decode_results(
 
     for index, metric in enumerate(metrics):
         ax = axes_flat[index]
-        mean = summary[f"{metric}_mean"]
-        sem = summary[f"{metric}_sem"].fillna(0.0)
-        ax.plot(summary["time"], mean, label=metric)
-        ax.fill_between(summary["time"], mean - sem, mean + sem, alpha=0.2)
+        for group_name, group in plot_groups:
+            mean = group[f"{metric}_mean"]
+            sem = group[f"{metric}_sem"].fillna(0.0)
+            label = str(group_name) if group_name is not None else metric
+            ax.plot(group["time"], mean, label=label)
+            ax.fill_between(group["time"], mean - sem, mean + sem, alpha=0.2)
         if metric == "accuracy" and chance is not None:
             ax.axhline(chance, color="0.4", linestyle="--", linewidth=1.0, label="chance")
         ax.axvline(0.0, color="0.6", linestyle=":", linewidth=1.0)

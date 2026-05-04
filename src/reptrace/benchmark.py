@@ -11,6 +11,7 @@ from reptrace.metadata import prepare_binary_metadata
 from reptrace.mne_time_decode import run_time_resolved_decode
 from reptrace.plot_time_decode import plot_time_decode_results
 from reptrace.results import aggregate_time_decode_csvs
+from reptrace.decoding import DECODER_CHOICES, normalize_decoder_name
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,10 @@ def _required_path(row: pd.Series, column: str, base_dir: Path) -> Path:
     return path
 
 
+def _safe_name(value: str) -> str:
+    return value.lower().replace("-", "_").replace(" ", "_")
+
+
 def _prepare_or_resolve_metadata(row: pd.Series, manifest_dir: Path, out_dir: Path, subject: str) -> Path | None:
     events_csv = _resolve_path(_string_value(row, "events_csv"), manifest_dir)
     metadata_csv = _resolve_path(_string_value(row, "metadata_csv"), manifest_dir)
@@ -115,6 +120,7 @@ def run_benchmark_manifest(
     default_step_ms: float = 10.0,
     default_n_splits: int = 5,
     default_max_iter: int = 1000,
+    default_decoder: str = "logistic",
 ) -> BenchmarkRun:
     """Run a manifest-defined benchmark and optionally aggregate and plot results."""
     manifest = pd.read_csv(manifest_csv)
@@ -133,10 +139,12 @@ def run_benchmark_manifest(
         label_column = _string_value(row, "label_column", default_label_column)
         if label_column is None:
             raise ValueError(f"Subject '{subject}' has no label column.")
+        decoder = normalize_decoder_name(_string_value(row, "decoder", default_decoder) or default_decoder)
 
         output_csv = _resolve_path(_string_value(row, "out_csv"), manifest_dir)
         if output_csv is None:
-            output_csv = out_dir / f"{subject}_time_decode.csv"
+            output_stem = f"{subject}_{_safe_name(decoder)}_time_decode" if "decoder" in manifest.columns else f"{subject}_time_decode"
+            output_csv = out_dir / f"{output_stem}.csv"
 
         metadata_csv = _prepare_or_resolve_metadata(row, manifest_dir, out_dir, subject)
         results = run_time_resolved_decode(
@@ -152,6 +160,7 @@ def run_benchmark_manifest(
             step_ms=_float_value(row, "step_ms", default_step_ms) or default_step_ms,
             n_splits=_int_value(row, "n_splits", default_n_splits),
             max_iter=_int_value(row, "max_iter", default_max_iter),
+            decoder=decoder,
         )
         if "subject" not in results.columns:
             results.insert(0, "subject", subject)
@@ -197,6 +206,7 @@ def main() -> None:
     parser.add_argument("--step-ms", type=float, default=10.0)
     parser.add_argument("--n-splits", type=int, default=5)
     parser.add_argument("--max-iter", type=int, default=1000)
+    parser.add_argument("--decoder", choices=DECODER_CHOICES, default="logistic")
     args = parser.parse_args()
 
     run = run_benchmark_manifest(
@@ -214,6 +224,7 @@ def main() -> None:
         default_step_ms=args.step_ms,
         default_n_splits=args.n_splits,
         default_max_iter=args.max_iter,
+        default_decoder=args.decoder,
     )
     print(f"Wrote {len(run.result_csvs)} subject result file(s).")
     if run.aggregate_csv is not None:

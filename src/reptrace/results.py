@@ -43,22 +43,25 @@ def aggregate_time_decode_results(results: pd.DataFrame) -> pd.DataFrame:
     if missing:
         raise ValueError(f"Results are missing required columns: {missing}")
 
+    group_columns = [column for column in ("decoder",) if column in results.columns]
+    subject_time_keys = [*group_columns, "subject", "time"]
+    aggregate_keys = [*group_columns, "time"]
     subject_time = (
-        results.groupby(["subject", "time"], as_index=False)[list(METRIC_COLUMNS)]
+        results.groupby(subject_time_keys, as_index=False)[list(METRIC_COLUMNS)]
         .mean()
-        .sort_values(["subject", "time"])
+        .sort_values(subject_time_keys)
     )
-    grouped = subject_time.groupby("time", as_index=False)
+    grouped = subject_time.groupby(aggregate_keys, as_index=False)
     aggregated = grouped[list(METRIC_COLUMNS)].mean()
     n_subjects = grouped["subject"].nunique().rename(columns={"subject": "n_subjects"})
-    aggregated = aggregated.merge(n_subjects, on="time")
+    aggregated = aggregated.merge(n_subjects, on=aggregate_keys)
 
     for metric in METRIC_COLUMNS:
         sem = grouped[metric].sem().rename(columns={metric: f"{metric}_sem"})
-        aggregated = aggregated.merge(sem, on="time")
+        aggregated = aggregated.merge(sem, on=aggregate_keys)
         aggregated = aggregated.rename(columns={metric: f"{metric}_mean"})
 
-    return aggregated.sort_values("time").reset_index(drop=True)
+    return aggregated.sort_values(aggregate_keys).reset_index(drop=True)
 
 
 def aggregate_time_decode_csvs(

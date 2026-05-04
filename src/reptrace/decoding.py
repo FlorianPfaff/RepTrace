@@ -1,22 +1,65 @@
 from __future__ import annotations
 
 import numpy as np
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.svm import LinearSVC
+
+DECODER_CHOICES = ("logistic", "lda", "linear_svm")
 
 
 def make_logistic_decoder(max_iter: int = 1000):
     """Create the default calibrated-probability baseline decoder."""
-    return make_pipeline(
-        StandardScaler(),
-        LogisticRegression(
-            class_weight="balanced",
-            max_iter=max_iter,
-            solver="lbfgs",
+    return make_decoder("logistic", max_iter=max_iter)
+
+
+def make_decoder(name: str = "logistic", *, max_iter: int = 1000):
+    """Create a standard probability-producing decoder by name."""
+    normalized = name.lower().replace("-", "_")
+    if normalized == "svm":
+        normalized = "linear_svm"
+    if normalized not in DECODER_CHOICES:
+        raise ValueError(f"Unknown decoder '{name}'. Available decoders: {', '.join(DECODER_CHOICES)}.")
+
+    if normalized == "logistic":
+        return make_pipeline(
+            StandardScaler(),
+            LogisticRegression(
+                class_weight="balanced",
+                max_iter=max_iter,
+                solver="lbfgs",
+            ),
+        )
+    if normalized == "lda":
+        return make_pipeline(
+            StandardScaler(),
+            LinearDiscriminantAnalysis(solver="svd"),
+        )
+    return CalibratedClassifierCV(
+        estimator=make_pipeline(
+            StandardScaler(),
+            LinearSVC(
+                class_weight="balanced",
+                max_iter=max_iter,
+            ),
         ),
+        method="sigmoid",
+        cv=3,
     )
+
+
+def normalize_decoder_name(name: str) -> str:
+    """Normalize decoder aliases to the names used in result tables."""
+    normalized = name.lower().replace("-", "_")
+    if normalized == "svm":
+        return "linear_svm"
+    if normalized not in DECODER_CHOICES:
+        raise ValueError(f"Unknown decoder '{name}'. Available decoders: {', '.join(DECODER_CHOICES)}.")
+    return normalized
 
 
 def make_cross_validator(labels: np.ndarray, groups: np.ndarray | None, n_splits: int):

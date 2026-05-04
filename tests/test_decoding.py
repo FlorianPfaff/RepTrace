@@ -1,6 +1,6 @@
 import numpy as np
 
-from reptrace.decoding import make_cross_validator, time_windows
+from reptrace.decoding import DECODER_CHOICES, make_cross_validator, make_decoder, normalize_decoder_name, time_windows
 
 
 def test_time_windows_returns_expected_centers():
@@ -20,3 +20,19 @@ def test_make_cross_validator_supports_grouped_splits():
     assert len(splits) == 2
     for train_idx, test_idx in splits:
         assert set(groups[train_idx]).isdisjoint(set(groups[test_idx]))
+
+
+def test_make_decoder_produces_probabilities_for_standard_decoders():
+    rng = np.random.default_rng(13)
+    features = rng.normal(size=(30, 4))
+    labels = np.array([0, 1] * 15)
+
+    for decoder in DECODER_CHOICES:
+        model = make_decoder(decoder, max_iter=2000)
+        model.fit(features, labels)
+        probabilities = model.predict_proba(features[:3])
+        assert probabilities.shape == (3, 2)
+
+
+def test_normalize_decoder_name_accepts_svm_alias():
+    assert normalize_decoder_name("svm") == "linear_svm"

@@ -1,0 +1,16 @@
+subject,decoder,epochs,events_csv,source_column,positive_pattern,label_column,positive_label,negative_label,group_column,tmin,tmax,window_ms,step_ms,n_splits
+sub-01,logistic,../data/nod/sub-01_epo.fif,../data/nod/sub-01_events.csv,stim_is_animate,True,condition,animate,inanimate,session,-0.1,0.8,20,10,2
+sub-02,logistic,../data/nod/sub-02_epo.fif,../data/nod/sub-02_events.csv,stim_is_animate,True,condition,animate,inanimate,session,-0.1,0.8,20,10,2
+sub-03,logistic,../data/nod/sub-03_epo.fif,../data/nod/sub-03_events.csv,stim_is_animate,True,condition,animate,inanimate,session,-0.1,0.8,20,10,2
+sub-04,logistic,../data/nod/sub-04_epo.fif,../data/nod/sub-04_events.csv,stim_is_animate,True,condition,animate,inanimate,session,-0.1,0.8,20,10,2
+sub-05,logistic,../data/nod/sub-05_epo.fif,../data/nod/sub-05_events.csv,stim_is_animate,True,condition,animate,inanimate,session,-0.1,0.8,20,10,2
+sub-01,lda,../data/nod/sub-01_epo.fif,../data/nod/sub-01_events.csv,stim_is_animate,True,condition,animate,inanimate,session,-0.1,0.8,20,10,2
+sub-02,lda,../data/nod/sub-02_epo.fif,../data/nod/sub-02_events.csv,stim_is_animate,True,condition,animate,inanimate,session,-0.1,0.8,20,10,2
+sub-03,lda,../data/nod/sub-03_epo.fif,../data/nod/sub-03_events.csv,stim_is_animate,True,condition,animate,inanimate,session,-0.1,0.8,20,10,2
+sub-04,lda,../data/nod/sub-04_epo.fif,../data/nod/sub-04_events.csv,stim_is_animate,True,condition,animate,inanimate,session,-0.1,0.8,20,10,2
+sub-05,lda,../data/nod/sub-05_epo.fif,../data/nod/sub-05_events.csv,stim_is_animate,True,condition,animate,inanimate,session,-0.1,0.8,20,10,2
+sub-01,linear_svm,../data/nod/sub-01_epo.fif,../data/nod/sub-01_events.csv,stim_is_animate,True,condition,animate,inanimate,session,-0.1,0.8,20,10,2
+sub-02,linear_svm,../data/nod/sub-02_epo.fif,../data/nod/sub-02_events.csv,stim_is_animate,True,condition,animate,inanimate,session,-0.1,0.8,20,10,2
+sub-03,linear_svm,../data/nod/sub-03_epo.fif,../data/nod/sub-03_events.csv,stim_is_animate,True,condition,animate,inanimate,session,-0.1,0.8,20,10,2
+sub-04,linear_svm,../data/nod/sub-04_epo.fif,../data/nod/sub-04_events.csv,stim_is_animate,True,condition,animate,inanimate,session,-0.1,0.8,20,10,2
+sub-05,linear_svm,../data/nod/sub-05_epo.fif,../data/nod/sub-05_events.csv,stim_is_animate,True,condition,animate,inanimate,session,-0.1,0.8,20,10,2

@@ -10,6 +10,7 @@ def _fake_decode(**kwargs):
     frame = pd.DataFrame(
         {
             "fold": [0, 1],
+            "decoder": [kwargs.get("decoder", "logistic"), kwargs.get("decoder", "logistic")],
             "time": [0.1, 0.1],
             "accuracy": [0.6, 0.8],
             "log_loss": [0.5, 0.4],
@@ -70,3 +71,27 @@ def test_run_benchmark_manifest_prepares_metadata_from_events(tmp_path: Path, mo
     metadata_csv = calls[0]["metadata_csv"]
     assert metadata_csv == tmp_path / "results" / "metadata" / "sub-01_metadata.csv"
     assert pd.read_csv(metadata_csv)["condition"].tolist() == ["face", "object"]
+
+
+def test_run_benchmark_manifest_supports_decoder_column(tmp_path: Path, monkeypatch):
+    manifest = tmp_path / "manifest.csv"
+    manifest.write_text(
+        "subject,epochs,metadata_csv,label_column,decoder\n"
+        "sub-01,data/sub-01_epo.fif,data/sub-01_metadata.csv,condition,logistic\n"
+        "sub-01,data/sub-01_epo.fif,data/sub-01_metadata.csv,condition,lda\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_decode(**kwargs):
+        calls.append(kwargs)
+        return _fake_decode(**kwargs)
+
+    monkeypatch.setattr("reptrace.benchmark.run_time_resolved_decode", fake_decode)
+
+    run = run_benchmark_manifest(manifest, out_dir=tmp_path / "results")
+
+    assert [call["decoder"] for call in calls] == ["logistic", "lda"]
+    assert [path.name for path in run.result_csvs] == ["sub-01_logistic_time_decode.csv", "sub-01_lda_time_decode.csv"]
+    summary = pd.read_csv(run.aggregate_csv)
+    assert summary["decoder"].tolist() == ["lda", "logistic"]

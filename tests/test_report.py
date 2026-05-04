@@ -4,6 +4,7 @@ import pandas as pd
 
 from reptrace.report import (
     build_time_decode_report,
+    summarize_decoder_comparison,
     summarize_aggregate_time_decode,
     summarize_subject_time_decode,
 )
@@ -75,3 +76,29 @@ def test_build_time_decode_report_writes_markdown_summary(tmp_path: Path):
     assert "# RepTrace Time-Decoding Report" in report
     assert "| Peak aggregate accuracy | 0.610 |" in report
     assert "| sub-01 | 0.150 | 0.610 | 0.600 |" in report
+
+
+def test_summarize_decoder_comparison_baseline_corrects_decoder_effects():
+    logistic = _summary_frame()
+    logistic["decoder"] = "logistic"
+    svm = _summary_frame()
+    svm["decoder"] = "linear_svm"
+    svm["accuracy_mean"] = [0.58, 0.62, 0.61]
+    summary = pd.concat([logistic, svm], ignore_index=True)
+
+    comparison = summarize_decoder_comparison(summary, baseline_window=(-0.1, 0.0), effect_window=(0.1, 0.3))
+
+    assert comparison["decoder"].tolist() == ["logistic", "linear_svm"]
+    assert comparison["effect_minus_baseline"].round(3).tolist() == [0.105, 0.035]
+
+
+def test_build_time_decode_report_handles_decoder_summary(tmp_path: Path):
+    summary = _summary_frame()
+    summary["decoder"] = "logistic"
+    summary_csv = tmp_path / "summary.csv"
+    summary.to_csv(summary_csv, index=False)
+
+    report = build_time_decode_report(summary_csv)
+
+    assert "# RepTrace Decoder Comparison Report" in report
+    assert "| logistic | 2 | 0.150 | 0.610 | 0.490 | 0.595 | 0.105 |" in report

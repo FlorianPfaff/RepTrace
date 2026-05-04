@@ -80,6 +80,38 @@ def summarize_subject_time_decode(
     return pd.DataFrame(rows)
 
 
+def summarize_decoder_comparison(
+    summary: pd.DataFrame,
+    *,
+    baseline_window: tuple[float, float] = (-0.1, 0.0),
+    effect_window: tuple[float, float] = (0.1, 0.8),
+) -> pd.DataFrame:
+    """Summarize aggregate benchmark metrics separately for each decoder."""
+    if "decoder" not in summary.columns:
+        raise ValueError("Summary must contain a 'decoder' column for decoder comparison.")
+
+    rows = []
+    for decoder, decoder_frame in summary.groupby("decoder", sort=True):
+        peak = decoder_frame.loc[decoder_frame["accuracy_mean"].idxmax()]
+        baseline_accuracy = _window_mean(decoder_frame, "accuracy_mean", *baseline_window)
+        effect_accuracy = _window_mean(decoder_frame, "accuracy_mean", *effect_window)
+        rows.append(
+            {
+                "decoder": decoder,
+                "n_subjects": int(peak["n_subjects"]),
+                "peak_time": float(peak["time"]),
+                "peak_accuracy": float(peak["accuracy_mean"]),
+                "baseline_accuracy_mean": baseline_accuracy,
+                "effect_accuracy_mean": effect_accuracy,
+                "effect_minus_baseline": effect_accuracy - baseline_accuracy,
+                "peak_log_loss": float(peak["log_loss_mean"]),
+                "peak_brier": float(peak["brier_mean"]),
+                "peak_ece": float(peak["ece_mean"]),
+            }
+        )
+    return pd.DataFrame(rows).sort_values("effect_minus_baseline", ascending=False).reset_index(drop=True)
+
+
 def build_time_decode_report(
     summary_csv: Path,
     *,
@@ -90,6 +122,31 @@ def build_time_decode_report(
 ) -> str:
     """Build a Markdown report for a time-resolved decoding benchmark."""
     summary = pd.read_csv(summary_csv)
+    if "decoder" in summary.columns:
+        comparison = summarize_decoder_comparison(
+            summary,
+            baseline_window=baseline_window,
+            effect_window=effect_window,
+        )
+        lines = [
+            "# RepTrace Decoder Comparison Report",
+            "",
+            f"- Summary CSV: `{summary_csv}`",
+            f"- Baseline window: {_format_float(baseline_window[0])} to {_format_float(baseline_window[1])} s",
+            f"- Effect window: {_format_float(effect_window[0])} to {_format_float(effect_window[1])} s",
+            "",
+            "| Decoder | Subjects | Peak time (s) | Peak accuracy | Baseline accuracy | Effect accuracy | Effect minus baseline | Peak log loss | Peak Brier | Peak ECE |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+        for row in comparison.itertuples(index=False):
+            lines.append(
+                f"| {row.decoder} | {row.n_subjects} | {_format_float(row.peak_time)} | {_format_float(row.peak_accuracy)} | "
+                f"{_format_float(row.baseline_accuracy_mean)} | {_format_float(row.effect_accuracy_mean)} | {_format_float(row.effect_minus_baseline)} | "
+                f"{_format_float(row.peak_log_loss)} | {_format_float(row.peak_brier)} | {_format_float(row.peak_ece)} |"
+            )
+        lines.append("")
+        return "\n".join(lines)
+
     aggregate = summarize_aggregate_time_decode(
         summary,
         chance=chance,

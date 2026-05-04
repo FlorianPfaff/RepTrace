@@ -39,3 +39,15 @@ def test_aggregate_time_decode_csvs_uses_filename_as_subject(tmp_path: Path):
 
     assert out.exists()
     assert aggregated["n_subjects"].tolist() == [2, 2]
+
+
+def test_aggregate_time_decode_results_keeps_decoder_groups_separate():
+    first = _result_frame("s1")
+    first["decoder"] = "logistic"
+    second = _result_frame("s1", offset=0.1)
+    second["decoder"] = "lda"
+
+    aggregated = aggregate_time_decode_results(pd.concat([first, second], ignore_index=True))
+
+    assert aggregated["decoder"].tolist() == ["lda", "lda", "logistic", "logistic"]
+    assert aggregated["accuracy_mean"].round(3).tolist() == [0.8, 0.9, 0.7, 0.8]

@@ -15,6 +15,8 @@ RepTrace currently provides tools for:
 - time-resolved decoding from MNE `Epochs` files;
 - calibrated classification metrics, including Brier score and expected
   calibration error;
+- standard decoder baselines, including logistic regression, LDA, and
+  calibrated linear SVM;
 - grouped cross-validation for session- or run-aware benchmarks; and
 - CSV aggregation, plotting, reporting, and subject-level inference for
   downstream interpretation.

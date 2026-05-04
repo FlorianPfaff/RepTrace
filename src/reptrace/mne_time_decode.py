@@ -9,7 +9,7 @@ import pandas as pd
 from sklearn.metrics import accuracy_score, log_loss
 from sklearn.preprocessing import LabelEncoder
 
-from reptrace.decoding import make_cross_validator, make_logistic_decoder, time_windows
+from reptrace.decoding import DECODER_CHOICES, make_cross_validator, make_decoder, normalize_decoder_name, time_windows
 from reptrace.metrics import brier_score_multiclass, expected_calibration_error
 
 
@@ -44,9 +44,11 @@ def run_time_resolved_decode(
     step_ms: float = 10.0,
     n_splits: int = 5,
     max_iter: int = 1000,
+    decoder: str = "logistic",
 ) -> pd.DataFrame:
     """Run time-resolved decoding on an MNE epochs file and save metrics as CSV."""
     epochs, metadata = _load_epochs_and_metadata(epochs_path, metadata_csv)
+    decoder_name = normalize_decoder_name(decoder)
 
     if label_column not in metadata.columns:
         raise ValueError(f"Label column '{label_column}' not found in metadata.")
@@ -74,7 +76,7 @@ def run_time_resolved_decode(
     for start, stop, center in time_windows(epochs.times, window_ms=window_ms, step_ms=step_ms):
         features = data[:, :, start:stop].reshape(len(labels), -1)
         for fold, (train_idx, test_idx) in enumerate(make_cross_validator(labels, groups, n_splits)):
-            model = make_logistic_decoder(max_iter=max_iter)
+            model = make_decoder(decoder_name, max_iter=max_iter)
             model.fit(features[train_idx], labels[train_idx])
 
             probabilities = model.predict_proba(features[test_idx])
@@ -84,6 +86,7 @@ def run_time_resolved_decode(
             rows.append(
                 {
                     "fold": fold,
+                    "decoder": decoder_name,
                     "time": center,
                     "window_start": float(epochs.times[start]),
                     "window_stop": float(epochs.times[stop - 1]),
@@ -120,6 +123,7 @@ def main() -> None:
     parser.add_argument("--step-ms", type=float, default=10.0)
     parser.add_argument("--n-splits", type=int, default=5)
     parser.add_argument("--max-iter", type=int, default=1000)
+    parser.add_argument("--decoder", choices=DECODER_CHOICES, default="logistic")
     args = parser.parse_args()
 
     results = run_time_resolved_decode(
@@ -135,6 +139,7 @@ def main() -> None:
         step_ms=args.step_ms,
         n_splits=args.n_splits,
         max_iter=args.max_iter,
+        decoder=args.decoder,
     )
     summary = results.groupby("time")[["accuracy", "log_loss", "brier", "ece"]].mean()
     best_time = summary["accuracy"].idxmax()
