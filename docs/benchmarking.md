@@ -180,6 +180,51 @@ This larger run is the minimum useful scale for subject-level statistical
 testing. The 5-subject pilot is useful for smoke testing and early signal
 checking; paper-facing claims should use the full staged manifest.
 
+## Second NOD-EEG Task
+
+Use `benchmarks/nod_superclass_canine_device_all.csv` for a second public task
+within the same staged NOD-EEG data. This task decodes ImageNet superclass
+labels `canine` versus `device`, using only trials whose `super_class` exactly
+matches one of those labels. The full staged set contains 7,293 canine trials
+and 6,950 device trials across 19 subjects.
+
+```bash
+python -m reptrace.validate_manifest \
+  benchmarks/nod_superclass_canine_device_all.csv \
+  --report-out results/nod_superclass_canine_device_all_validation.csv
+
+python -m reptrace.benchmark \
+  benchmarks/nod_superclass_canine_device_all.csv \
+  --out-dir results/nod_superclass_canine_device_all \
+  --aggregate-out results/nod_superclass_canine_device_all/summary.csv \
+  --plot-out results/nod_superclass_canine_device_all/summary.png \
+  --calibration-dir results/nod_superclass_canine_device_all/calibration \
+  --chance 0.5
+
+python -m reptrace.report \
+  results/nod_superclass_canine_device_all/summary.csv \
+  "results/nod_superclass_canine_device_all/sub-*_time_decode.csv" \
+  --chance 0.5 \
+  --out results/nod_superclass_canine_device_all/report.md
+
+python -m reptrace.inference \
+  "results/nod_superclass_canine_device_all/sub-*_time_decode.csv" \
+  --chance 0.5 \
+  --n-permutations 10000 \
+  --cluster-alpha 0.05 \
+  --out-time results/nod_superclass_canine_device_all/inference_time.csv \
+  --out-clusters results/nod_superclass_canine_device_all/inference_clusters.csv
+
+python -m reptrace.calibration \
+  results/nod_superclass_canine_device_all/summary.csv \
+  "results/nod_superclass_canine_device_all/calibration/*_calibration_bins.csv" \
+  --out-report results/nod_superclass_canine_device_all/calibration_report.md \
+  --out-bins results/nod_superclass_canine_device_all/reliability_bins.csv
+```
+
+This gives the paper a second semantic benchmark without changing dataset,
+preprocessing, CV logic, or reporting machinery.
+
 ## Decoder Comparison
 
 RepTrace supports standard probability-producing decoders with the `decoder`

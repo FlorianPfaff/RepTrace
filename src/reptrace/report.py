@@ -122,7 +122,7 @@ def build_time_decode_report(
 ) -> str:
     """Build a Markdown report for a time-resolved decoding benchmark."""
     summary = pd.read_csv(summary_csv)
-    if "decoder" in summary.columns:
+    if "decoder" in summary.columns and summary["decoder"].nunique() > 1:
         comparison = summarize_decoder_comparison(
             summary,
             baseline_window=baseline_window,

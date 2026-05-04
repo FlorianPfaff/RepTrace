@@ -92,9 +92,14 @@ def test_summarize_decoder_comparison_baseline_corrects_decoder_effects():
     assert comparison["effect_minus_baseline"].round(3).tolist() == [0.105, 0.035]
 
 
-def test_build_time_decode_report_handles_decoder_summary(tmp_path: Path):
-    summary = _summary_frame()
-    summary["decoder"] = "logistic"
+def test_build_time_decode_report_handles_multi_decoder_summary(tmp_path: Path):
+    summary = pd.concat(
+        [
+            _summary_frame().assign(decoder="logistic"),
+            _summary_frame().assign(decoder="lda"),
+        ],
+        ignore_index=True,
+    )
     summary_csv = tmp_path / "summary.csv"
     summary.to_csv(summary_csv, index=False)
 
@@ -102,3 +107,15 @@ def test_build_time_decode_report_handles_decoder_summary(tmp_path: Path):
 
     assert "# RepTrace Decoder Comparison Report" in report
     assert "| logistic | 2 | 0.150 | 0.610 | 0.490 | 0.595 | 0.105 |" in report
+
+
+def test_build_time_decode_report_treats_single_decoder_as_time_report(tmp_path: Path):
+    summary = _summary_frame()
+    summary["decoder"] = "logistic"
+    summary_csv = tmp_path / "summary.csv"
+    summary.to_csv(summary_csv, index=False)
+
+    report = build_time_decode_report(summary_csv)
+
+    assert "# RepTrace Time-Decoding Report" in report
+    assert "| Peak aggregate accuracy | 0.610 |" in report

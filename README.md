@@ -103,9 +103,9 @@ python -m reptrace.results \
 The first public benchmark target is NOD-MEG/NOD-EEG because the dataset
 provides preprocessed MNE epochs and metadata for natural-image decoding. The
 recommended first task is animate-versus-inanimate decoding from the NOD-EEG
-`stim_is_animate` metadata. Face/object labels are too sparse in the initial
-sub-01 detailed events slice to make a useful first pilot, but richer semantic
-tasks can be added once the public baseline is reproducible.
+`stim_is_animate` metadata. The second staged task is superclass decoding
+between `canine` and `device` trials, which keeps the same public dataset and
+reporting workflow while testing a different semantic contrast.
 
 THINGS-EEG and THINGS-MEG are natural follow-up benchmarks for larger visual
 object representation experiments. Lab data with task localizers and planning
