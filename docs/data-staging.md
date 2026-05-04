@@ -110,6 +110,17 @@ foreach ($sid in 1..5) {
 }
 ```
 
+The available NOD-EEG preprocessed epoch subjects are:
+
+```text
+sub-01 sub-02 sub-03 sub-04 sub-05 sub-06 sub-07 sub-08 sub-09
+sub-10 sub-11 sub-12 sub-13 sub-14 sub-24 sub-26 sub-27 sub-29 sub-30
+```
+
+After staging those 19 subjects, the expected `data/nod/` footprint is about
+3 GB: the first nine epoch files are about 215 MB each, and the remaining ten
+epoch files are about 108 MB each.
+
 ## Alternative Download Methods
 
 OpenNeuro's browser download, the Deno OpenNeuro CLI, or DataLad/git-annex can
@@ -135,6 +146,11 @@ data/nod/sub-04_epo.fif
 data/nod/sub-04_events.csv
 data/nod/sub-05_epo.fif
 data/nod/sub-05_events.csv
+data/nod/sub-06_epo.fif
+data/nod/sub-06_events.csv
+...
+data/nod/sub-30_epo.fif
+data/nod/sub-30_events.csv
 ```
 
 Then update `benchmarks/nod_animate_sub01.csv` if the staged filenames differ.

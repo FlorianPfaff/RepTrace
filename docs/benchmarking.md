@@ -124,6 +124,33 @@ python -m reptrace.report \
 The report records the aggregate peak, baseline-window accuracy,
 effect-window accuracy, calibration metrics at the peak, and per-subject peaks.
 
+## Full NOD-EEG Pilot
+
+After staging all available NOD-EEG preprocessed epoch files and detailed event
+files, validate the 19-subject manifest. This manifest uses 2 grouped folds
+because several subjects have only 2 unique session groups:
+
+```bash
+python -m reptrace.validate_manifest \
+  benchmarks/nod_animate_all.csv \
+  --report-out results/nod_animate_all_validation.csv
+```
+
+Then run the same animate/inanimate benchmark over every staged NOD-EEG subject:
+
+```bash
+python -m reptrace.benchmark \
+  benchmarks/nod_animate_all.csv \
+  --out-dir results/nod_animate_all \
+  --aggregate-out results/nod_animate_all/summary.csv \
+  --plot-out results/nod_animate_all/nod_animate_all_summary.png \
+  --chance 0.5
+```
+
+This larger run is the minimum useful scale for subject-level statistical
+testing. The 5-subject pilot is useful for smoke testing and early signal
+checking; paper-facing claims should use the full staged manifest.
+
 ## Acceptance Target
 
 The first useful milestone is not just above-chance accuracy. The benchmark
