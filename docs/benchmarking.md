@@ -225,6 +225,32 @@ python -m reptrace.calibration \
 This gives the paper a second semantic benchmark without changing dataset,
 preprocessing, CV logic, or reporting machinery.
 
+## Next NOD-EEG Task
+
+Use `benchmarks/nod_superclass_container_covering_all.csv` for the next staged
+task. This contrast decodes ImageNet superclass labels `container` versus
+`covering`, using only trials whose `super_class` exactly matches one of those
+labels. Both labels are inanimate, so this task tests category decoding beyond
+the animate/inanimate distinction. The full staged set contains 5,215 container
+trials and 4,809 covering trials across all 19 subjects.
+
+```bash
+python -m reptrace.validate_manifest \
+  benchmarks/nod_superclass_container_covering_all.csv \
+  --report-out results/nod_superclass_container_covering_all_validation.csv
+
+python -m reptrace.benchmark \
+  benchmarks/nod_superclass_container_covering_all.csv \
+  --out-dir results/nod_superclass_container_covering_all \
+  --aggregate-out results/nod_superclass_container_covering_all/summary.csv \
+  --plot-out results/nod_superclass_container_covering_all/summary.png \
+  --calibration-dir results/nod_superclass_container_covering_all/calibration \
+  --chance 0.5
+```
+
+After the benchmark finishes, generate the same report, inference, calibration,
+and reliability outputs as for the canine/device superclass task.
+
 ## Decoder Comparison
 
 RepTrace supports standard probability-producing decoders with the `decoder`
