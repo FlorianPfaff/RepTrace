@@ -10,6 +10,7 @@ import pandas as pd
 from reptrace.temporal_model import probability_columns, read_probability_observations
 
 DEFAULT_THRESHOLD_WINDOW = (-0.35, -0.05)
+DEFAULT_DETECTION_WINDOW = (0.0, float("inf"))
 DEFAULT_THRESHOLD_QUANTILE = 0.95
 GROUP_COLUMNS = ("subject", "decoder", "emission_mode")
 
@@ -34,6 +35,11 @@ def _sequence_columns(frame: pd.DataFrame) -> list[str]:
     if "sequence_id" not in columns:
         raise ValueError("Observation rows must contain sequence_id or sample_index.")
     return columns
+
+
+def _window_mask(frame: pd.DataFrame, window: tuple[float, float]) -> pd.Series:
+    start, stop = window
+    return (frame["time"] >= start) & (frame["time"] <= stop)
 
 
 def _score_values(frame: pd.DataFrame, score_column: str) -> pd.Series:
@@ -167,6 +173,136 @@ def _is_correct_detection(row: pd.Series) -> bool:
     return False
 
 
+def _annotate_group_threshold(
+    frame: pd.DataFrame,
+    *,
+    threshold_window: tuple[float, float],
+    threshold_quantile: float,
+    score_column: str,
+) -> pd.DataFrame:
+    frame = frame.copy()
+    frame["_onset_score"] = _score_values(frame, score_column)
+    threshold = _threshold_for_group(
+        frame,
+        threshold_window=threshold_window,
+        threshold_quantile=threshold_quantile,
+        score_column=score_column,
+    )
+    frame["onset_score"] = frame["_onset_score"]
+    frame["score_threshold"] = threshold
+    frame["above_threshold"] = np.isfinite(threshold) & (frame["_onset_score"] >= threshold)
+    frame["score_column"] = score_column
+    frame["threshold_quantile"] = threshold_quantile
+    frame["threshold_window_start"] = threshold_window[0]
+    frame["threshold_window_stop"] = threshold_window[1]
+    if "is_correct" not in frame.columns and {"true_label", "predicted_label"}.issubset(frame.columns):
+        frame["is_correct"] = frame["true_label"].astype(int) == frame["predicted_label"].astype(int)
+    return frame
+
+
+def annotate_threshold_crossings(
+    observations: pd.DataFrame,
+    *,
+    threshold_window: tuple[float, float] = DEFAULT_THRESHOLD_WINDOW,
+    threshold_quantile: float = DEFAULT_THRESHOLD_QUANTILE,
+    score_column: str = "confidence",
+) -> pd.DataFrame:
+    """Annotate observation rows with baseline-derived threshold crossings."""
+
+    if not 0.0 <= threshold_quantile <= 1.0:
+        raise ValueError("threshold_quantile must be between 0 and 1.")
+    if "time" not in observations.columns:
+        raise ValueError("Observation rows must contain a time column.")
+
+    observations = _ensure_prediction_columns(observations)
+    group_columns = _group_columns(observations)
+    frames = []
+    grouped = observations.groupby(group_columns, sort=True) if group_columns else [((), observations)]
+    for _, group_frame in grouped:
+        frames.append(
+            _annotate_group_threshold(
+                group_frame,
+                threshold_window=threshold_window,
+                threshold_quantile=threshold_quantile,
+                score_column=score_column,
+            )
+        )
+    return pd.concat(frames, ignore_index=True) if frames else observations.copy()
+
+
+def _sequence_crossing_rate(frame: pd.DataFrame, sequence_columns: list[str]) -> tuple[int, float]:
+    if frame.empty:
+        return 0, np.nan
+    sequence_count = 0
+    crossing_count = 0
+    for _, sequence_frame in frame.groupby(sequence_columns, sort=True):
+        sequence_count += 1
+        crossing_count += bool(sequence_frame["above_threshold"].any())
+    return crossing_count, crossing_count / sequence_count if sequence_count else np.nan
+
+
+def _window_threshold_stats(frame: pd.DataFrame, window: tuple[float, float], sequence_columns: list[str]) -> dict[str, float | int]:
+    window_frame = frame.loc[_window_mask(frame, window)]
+    above_threshold = window_frame["above_threshold"].astype(bool)
+    sequence_crossing_count, sequence_crossing_rate = _sequence_crossing_rate(window_frame, sequence_columns)
+    stats = {
+        "n_observations": len(window_frame),
+        "threshold_crossing_count": int(above_threshold.sum()),
+        "threshold_crossing_rate": float(above_threshold.mean()) if len(above_threshold) else np.nan,
+        "sequence_crossing_count": int(sequence_crossing_count),
+        "sequence_crossing_rate": float(sequence_crossing_rate) if np.isfinite(sequence_crossing_rate) else np.nan,
+    }
+    if "is_correct" in window_frame.columns:
+        correct_crossings = window_frame.loc[above_threshold, "is_correct"].astype(bool)
+        stats["correct_crossing_count"] = int(correct_crossings.sum())
+        stats["correct_crossing_rate"] = float(correct_crossings.mean()) if len(correct_crossings) else np.nan
+    return stats
+
+
+def summarize_threshold_crossings(
+    thresholded_observations: pd.DataFrame,
+    *,
+    baseline_window: tuple[float, float] = DEFAULT_THRESHOLD_WINDOW,
+    detection_window: tuple[float, float] = DEFAULT_DETECTION_WINDOW,
+) -> pd.DataFrame:
+    """Summarize baseline false positives separately from post-event detections."""
+
+    group_columns = _group_columns(thresholded_observations)
+    sequence_columns = _sequence_columns(thresholded_observations)
+    rows = []
+    grouped = thresholded_observations.groupby(group_columns, sort=True) if group_columns else [((), thresholded_observations)]
+    for keys, group_frame in grouped:
+        key_values = keys if isinstance(keys, tuple) else (keys,)
+        group_values = dict(zip(group_columns, key_values, strict=True))
+        baseline_stats = _window_threshold_stats(group_frame, baseline_window, sequence_columns)
+        detection_stats = _window_threshold_stats(group_frame, detection_window, sequence_columns)
+        rows.append(
+            {
+                **group_values,
+                "score_threshold": group_frame["score_threshold"].iloc[0] if "score_threshold" in group_frame else np.nan,
+                "score_column": group_frame["score_column"].iloc[0] if "score_column" in group_frame else "",
+                "threshold_quantile": group_frame["threshold_quantile"].iloc[0] if "threshold_quantile" in group_frame else np.nan,
+                "baseline_window_start": baseline_window[0],
+                "baseline_window_stop": baseline_window[1],
+                "detection_window_start": detection_window[0],
+                "detection_window_stop": detection_window[1],
+                "baseline_n_observations": baseline_stats["n_observations"],
+                "baseline_false_positive_count": baseline_stats["threshold_crossing_count"],
+                "baseline_false_positive_rate": baseline_stats["threshold_crossing_rate"],
+                "baseline_false_positive_sequence_count": baseline_stats["sequence_crossing_count"],
+                "baseline_false_positive_sequence_rate": baseline_stats["sequence_crossing_rate"],
+                "post_stimulus_n_observations": detection_stats["n_observations"],
+                "post_stimulus_detection_count": detection_stats["threshold_crossing_count"],
+                "post_stimulus_detection_rate": detection_stats["threshold_crossing_rate"],
+                "post_stimulus_detection_sequence_count": detection_stats["sequence_crossing_count"],
+                "post_stimulus_detection_sequence_rate": detection_stats["sequence_crossing_rate"],
+                "post_stimulus_correct_detection_count": detection_stats.get("correct_crossing_count", np.nan),
+                "post_stimulus_correct_detection_rate": detection_stats.get("correct_crossing_rate", np.nan),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 # pylint: disable-next=too-many-locals
 def detect_onsets(
     observations: pd.DataFrame,
@@ -183,9 +319,12 @@ def detect_onsets(
     if "time" not in observations.columns:
         raise ValueError("Observation rows must contain a time column.")
 
-    observations = _ensure_prediction_columns(observations)
-    observations = observations.copy()
-    observations["_onset_score"] = _score_values(observations, score_column)
+    observations = annotate_threshold_crossings(
+        observations,
+        threshold_window=threshold_window,
+        threshold_quantile=threshold_quantile,
+        score_column=score_column,
+    )
     group_columns = _group_columns(observations)
     sequence_columns = _sequence_columns(observations)
     event_rows = []
@@ -194,12 +333,7 @@ def detect_onsets(
     for keys, group_frame in grouped:
         key_values = keys if isinstance(keys, tuple) else (keys,)
         group_values = dict(zip(group_columns, key_values, strict=True))
-        threshold = _threshold_for_group(
-            group_frame,
-            threshold_window=threshold_window,
-            threshold_quantile=threshold_quantile,
-            score_column=score_column,
-        )
+        threshold = group_frame["score_threshold"].iloc[0]
         for _, sequence_frame in group_frame.sort_values([*sequence_columns, "time"]).groupby(sequence_columns, sort=True):
             candidates = sequence_frame
             if detection_start is not None:
@@ -268,24 +402,44 @@ def detect_onsets_from_csvs(
     detection_start: float | None = None,
     out_events: Path | None = None,
     out_summary: Path | None = None,
+    out_thresholded_observations: Path | None = None,
+    out_threshold_summary: Path | None = None,
+    detection_window: tuple[float, float] = DEFAULT_DETECTION_WINDOW,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Read probability observations, detect onsets, and optionally write CSV outputs."""
 
     observations = read_probability_observations(observation_csvs)
-    events = detect_onsets(
+    thresholded_observations = annotate_threshold_crossings(
         observations,
+        threshold_window=threshold_window,
+        threshold_quantile=threshold_quantile,
+        score_column=score_column,
+    )
+    events = detect_onsets(
+        thresholded_observations,
         threshold_window=threshold_window,
         threshold_quantile=threshold_quantile,
         score_column=score_column,
         detection_start=detection_start,
     )
     summary = summarize_onset_events(events)
+    threshold_summary = summarize_threshold_crossings(
+        thresholded_observations,
+        baseline_window=threshold_window,
+        detection_window=detection_window,
+    )
     if out_events is not None:
         out_events.parent.mkdir(parents=True, exist_ok=True)
         events.to_csv(out_events, index=False)
     if out_summary is not None:
         out_summary.parent.mkdir(parents=True, exist_ok=True)
         summary.to_csv(out_summary, index=False)
+    if out_thresholded_observations is not None:
+        out_thresholded_observations.parent.mkdir(parents=True, exist_ok=True)
+        thresholded_observations.drop(columns=["_onset_score"], errors="ignore").to_csv(out_thresholded_observations, index=False)
+    if out_threshold_summary is not None:
+        out_threshold_summary.parent.mkdir(parents=True, exist_ok=True)
+        threshold_summary.to_csv(out_threshold_summary, index=False)
     return events, summary
 
 
@@ -298,6 +452,9 @@ def main() -> None:
     parser.add_argument("--threshold-quantile", type=float, default=DEFAULT_THRESHOLD_QUANTILE)
     parser.add_argument("--score-column", default="confidence")
     parser.add_argument("--detection-start", type=float)
+    parser.add_argument("--detection-window", nargs=2, type=float, default=DEFAULT_DETECTION_WINDOW, metavar=("START", "STOP"))
+    parser.add_argument("--out-thresholded-observations", type=Path)
+    parser.add_argument("--out-threshold-summary", type=Path)
     args = parser.parse_args()
 
     events, summary = detect_onsets_from_csvs(
@@ -306,8 +463,11 @@ def main() -> None:
         threshold_quantile=args.threshold_quantile,
         score_column=args.score_column,
         detection_start=args.detection_start,
+        detection_window=tuple(args.detection_window),
         out_events=args.out_events,
         out_summary=args.out_summary,
+        out_thresholded_observations=args.out_thresholded_observations,
+        out_threshold_summary=args.out_threshold_summary,
     )
     print(f"Wrote onset events: {args.out_events}")
     print(f"Wrote onset summary: {args.out_summary}")

@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from reptrace.onset_detection import detect_onsets, detect_onsets_from_csvs, summarize_onset_events
+from reptrace.onset_detection import annotate_threshold_crossings, detect_onsets, detect_onsets_from_csvs, summarize_onset_events, summarize_threshold_crossings
 
 
 def _observation_frame() -> pd.DataFrame:
@@ -99,10 +99,37 @@ def test_summarize_onset_events_reports_detection_rates():
     assert row["post_detection_latency_median"] == 0.10
 
 
+def test_summarize_threshold_crossings_separates_baseline_and_post_stimulus():
+    thresholded = annotate_threshold_crossings(
+        _observation_frame(),
+        threshold_window=(-0.20, -0.10),
+        threshold_quantile=0.875,
+    )
+
+    summary = summarize_threshold_crossings(
+        thresholded,
+        baseline_window=(-0.20, -0.10),
+        detection_window=(0.0, float("inf")),
+    )
+
+    assert len(summary) == 1
+    row = summary.iloc[0]
+    assert row["baseline_n_observations"] == 8
+    assert row["baseline_false_positive_count"] == 1
+    assert row["baseline_false_positive_sequence_count"] == 1
+    assert row["post_stimulus_n_observations"] == 12
+    assert row["post_stimulus_detection_count"] == 8
+    assert row["post_stimulus_detection_sequence_count"] == 3
+    assert row["post_stimulus_correct_detection_count"] == 7
+    assert row["baseline_false_positive_rate"] < row["post_stimulus_detection_rate"]
+
+
 def test_detect_onsets_from_csvs_writes_outputs(tmp_path: Path):
     observations_path = tmp_path / "observations.csv"
     events_path = tmp_path / "events.csv"
     summary_path = tmp_path / "summary.csv"
+    thresholded_path = tmp_path / "thresholded.csv"
+    threshold_summary_path = tmp_path / "threshold_summary.csv"
     _observation_frame().to_csv(observations_path, index=False)
 
     events, summary = detect_onsets_from_csvs(
@@ -111,11 +138,17 @@ def test_detect_onsets_from_csvs_writes_outputs(tmp_path: Path):
         threshold_quantile=0.875,
         out_events=events_path,
         out_summary=summary_path,
+        out_thresholded_observations=thresholded_path,
+        out_threshold_summary=threshold_summary_path,
     )
 
     assert events_path.exists()
     assert summary_path.exists()
+    assert thresholded_path.exists()
+    assert threshold_summary_path.exists()
     assert len(events) == 4
     assert len(summary) == 1
     written = pd.read_csv(events_path)
     assert written["source_file"].isna().sum() == 0
+    threshold_summary = pd.read_csv(threshold_summary_path)
+    assert threshold_summary["baseline_false_positive_count"].iloc[0] == 1
