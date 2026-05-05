@@ -81,14 +81,31 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}/src
         run: |
-          DATA_ROOT="${{ inputs.data_root }}"
-          if [[ ! -e "$DATA_ROOT" && -e "$GITHUB_WORKSPACE/$DATA_ROOT" ]]; then
-            DATA_ROOT="$GITHUB_WORKSPACE/$DATA_ROOT"
-          fi
-          if [[ ! -e "$DATA_ROOT" ]]; then
-            echo "Data root does not exist: $DATA_ROOT"
+          REQUESTED_DATA_ROOT="${{ inputs.data_root }}"
+          CANDIDATES=(
+            "$REQUESTED_DATA_ROOT"
+            "$GITHUB_WORKSPACE/$REQUESTED_DATA_ROOT"
+            "$GITHUB_WORKSPACE/data/nod"
+            "$GITHUB_WORKSPACE/../data/nod"
+            "$GITHUB_WORKSPACE/../../data/nod"
+            "${RUNNER_WORKSPACE:-}/data/nod"
+            "${RUNNER_WORKSPACE:-}/../data/nod"
+            "$HOME/data/nod"
+            "$HOME/nod"
+          )
+          DATA_ROOT=""
+          for CANDIDATE in "${CANDIDATES[@]}"; do
+            if [[ -n "$CANDIDATE" && -d "$CANDIDATE" && -f "$CANDIDATE/sub-01_epo.fif" && -f "$CANDIDATE/sub-01_events.csv" ]]; then
+              DATA_ROOT="$(cd "$CANDIDATE" && pwd)"
+              break
+            fi
+          done
+          if [[ -z "$DATA_ROOT" ]]; then
+            echo "No staged NOD data root found. Checked:"
+            printf '  %s\n' "${CANDIDATES[@]}"
             exit 1
           fi
+          echo "Using data root: $DATA_ROOT"
           OUTPUT_DIR="$GITHUB_WORKSPACE/${{ inputs.output_dir }}"
           read -r -a DECODER_ARGS <<< "${{ inputs.decoders }}"
           WORKFLOW_ARGS=(
