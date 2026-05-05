@@ -49,38 +49,38 @@ jobs:
         run: |
           PYTHON_CMD="python${{ inputs.python_version }}"
           "$PYTHON_CMD" --version
-          "$PYTHON_CMD" -m pip install --upgrade pip
-          "$PYTHON_CMD" -m pip install poetry
-          PYTHON_EXE="$($PYTHON_CMD -c 'import sys; print(sys.executable)')"
-          "$PYTHON_CMD" -m poetry env use "$PYTHON_EXE"
-          "$PYTHON_CMD" -m poetry install
+          "$PYTHON_CMD" -m venv "$GITHUB_WORKSPACE/.workflow-venv"
+          "$GITHUB_WORKSPACE/.workflow-venv/bin/python" -m pip install --upgrade pip poetry
+          echo "POETRY_BIN=$GITHUB_WORKSPACE/.workflow-venv/bin/poetry" >> "$GITHUB_ENV"
+          "$GITHUB_WORKSPACE/.workflow-venv/bin/poetry" env use "$GITHUB_WORKSPACE/.workflow-venv/bin/python"
+          "$GITHUB_WORKSPACE/.workflow-venv/bin/poetry" install
 
       - name: Run Paper 2 workflow
-        shell: pwsh
+        shell: bash
         env:
           PYTHONPATH: ${{ github.workspace }}/src
         run: |
-          $dataRoot = "${{ inputs.data_root }}"
-          if (-not (Test-Path $dataRoot) -and (Test-Path (Join-Path $env:GITHUB_WORKSPACE $dataRoot))) {
-            $dataRoot = Join-Path $env:GITHUB_WORKSPACE $dataRoot
-          }
-          if (-not (Test-Path $dataRoot)) {
-            throw "Data root does not exist: $dataRoot"
-          }
-          $outputDir = Join-Path $env:GITHUB_WORKSPACE "${{ inputs.output_dir }}"
-          $workflowArgs = @(
-            "--data-root", $dataRoot,
-            "--out-dir", $outputDir,
-            "--n-permutations", "${{ inputs.n_permutations }}",
-            "--decoders"
+          DATA_ROOT="${{ inputs.data_root }}"
+          if [[ ! -e "$DATA_ROOT" && -e "$GITHUB_WORKSPACE/$DATA_ROOT" ]]; then
+            DATA_ROOT="$GITHUB_WORKSPACE/$DATA_ROOT"
+          fi
+          if [[ ! -e "$DATA_ROOT" ]]; then
+            echo "Data root does not exist: $DATA_ROOT"
+            exit 1
+          fi
+          OUTPUT_DIR="$GITHUB_WORKSPACE/${{ inputs.output_dir }}"
+          read -r -a DECODER_ARGS <<< "${{ inputs.decoders }}"
+          WORKFLOW_ARGS=(
+            "--data-root" "$DATA_ROOT"
+            "--out-dir" "$OUTPUT_DIR"
+            "--n-permutations" "${{ inputs.n_permutations }}"
+            "--decoders" "${DECODER_ARGS[@]}"
           )
-          $workflowArgs += "${{ inputs.decoders }}".Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries)
-          $paperExportDir = "${{ inputs.paper_export_dir }}"
-          if ($paperExportDir) {
-            $workflowArgs += @("--paper-export-dir", $paperExportDir)
-          }
-          $pythonCmd = "python${{ inputs.python_version }}"
-          & $pythonCmd -m poetry run python -m reptrace.paper2_workflow @workflowArgs
+          PAPER_EXPORT_DIR="${{ inputs.paper_export_dir }}"
+          if [[ -n "$PAPER_EXPORT_DIR" ]]; then
+            WORKFLOW_ARGS+=("--paper-export-dir" "$PAPER_EXPORT_DIR")
+          fi
+          "$POETRY_BIN" run python -m reptrace.paper2_workflow "${WORKFLOW_ARGS[@]}"
 
       - name: Upload compact Paper 2 artifacts
         uses: actions/upload-artifact@v6
