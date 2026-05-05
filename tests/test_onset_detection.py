@@ -64,6 +64,8 @@ def test_detect_onsets_finds_first_threshold_crossing():
     assert not by_sequence.loc[3, "detected"]
     assert by_sequence.loc[0, "is_correct_at_detection"]
     assert by_sequence.loc[1, "is_correct_at_detection"]
+    assert by_sequence.loc[0, "detection_run_length"] == 2
+    assert by_sequence.loc[0, "score_peak_in_run"] == 0.92
 
 
 def test_detection_start_excludes_baseline_false_alarms():
@@ -79,6 +81,71 @@ def test_detection_start_excludes_baseline_false_alarms():
     assert row["detected"]
     assert not row["detected_before_zero"]
     assert row["detection_time"] == 0.05
+
+
+def test_min_consecutive_requires_sustained_threshold_crossing():
+    events = detect_onsets(
+        _observation_frame(),
+        threshold_window=(-0.20, -0.10),
+        threshold_quantile=0.875,
+        detection_start=0.0,
+        min_consecutive=2,
+    )
+
+    by_sequence = events.set_index("sequence_id")
+
+    assert by_sequence.loc[0, "detected"]
+    assert by_sequence.loc[0, "detection_time"] == 0.15
+    assert by_sequence.loc[0, "detection_run_length"] == 2
+    assert by_sequence.loc[1, "detected"]
+    assert by_sequence.loc[1, "detection_run_length"] == 3
+    assert by_sequence.loc[2, "detected"]
+    assert by_sequence.loc[2, "detection_run_length"] == 3
+    assert not by_sequence.loc[3, "detected"]
+
+
+def test_min_duration_requires_long_enough_threshold_run():
+    events = detect_onsets(
+        _observation_frame(),
+        threshold_window=(-0.20, -0.10),
+        threshold_quantile=0.875,
+        detection_start=0.0,
+        min_duration=0.18,
+    )
+
+    by_sequence = events.set_index("sequence_id")
+
+    assert not by_sequence.loc[0, "detected"]
+    assert by_sequence.loc[1, "detected"]
+    assert by_sequence.loc[1, "detection_run_duration"] >= 0.18
+    assert by_sequence.loc[2, "detected"]
+    assert by_sequence.loc[2, "detection_run_duration"] >= 0.18
+
+
+def test_stable_prediction_splits_detection_runs():
+    frame = _observation_frame()
+    mask = (frame["sequence_id"] == 1) & (frame["time"] == 0.15)
+    frame.loc[mask, "predicted_label"] = 1 - frame.loc[mask, "predicted_label"]
+    frame.loc[mask, "predicted_class"] = frame.loc[mask, "predicted_label"].map(lambda label: f"class-{label}")
+
+    unstable = detect_onsets(
+        frame,
+        threshold_window=(-0.20, -0.10),
+        threshold_quantile=0.875,
+        detection_start=0.0,
+        min_consecutive=2,
+    )
+    stable = detect_onsets(
+        frame,
+        threshold_window=(-0.20, -0.10),
+        threshold_quantile=0.875,
+        detection_start=0.0,
+        min_consecutive=2,
+        require_stable_prediction=True,
+    )
+
+    assert unstable.set_index("sequence_id").loc[1, "detected"]
+    assert not stable.set_index("sequence_id").loc[1, "detected"]
 
 
 def test_summarize_onset_events_reports_detection_rates():
@@ -97,6 +164,7 @@ def test_summarize_onset_events_reports_detection_rates():
     assert row["false_alarm_count"] == 1
     assert row["correct_detection_count"] == 3
     assert row["post_detection_latency_median"] == 0.10
+    assert row["post_detection_run_length_median"] == 2.5
 
 
 def test_detect_onsets_from_csvs_writes_outputs(tmp_path: Path):
@@ -109,6 +177,7 @@ def test_detect_onsets_from_csvs_writes_outputs(tmp_path: Path):
         [observations_path],
         threshold_window=(-0.20, -0.10),
         threshold_quantile=0.875,
+        min_consecutive=2,
         out_events=events_path,
         out_summary=summary_path,
     )
@@ -119,3 +188,5 @@ def test_detect_onsets_from_csvs_writes_outputs(tmp_path: Path):
     assert len(summary) == 1
     written = pd.read_csv(events_path)
     assert written["source_file"].isna().sum() == 0
+    assert written["min_consecutive"].nunique() == 1
+    assert written["min_consecutive"].iloc[0] == 2
