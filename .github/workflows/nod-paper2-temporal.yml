@@ -27,7 +27,7 @@ on:
         required: true
         default: "100"
       python_version:
-        description: "Python version for the local py launcher"
+        description: "Python version for the local Linux runner"
         required: true
         default: "3.12"
 
@@ -37,7 +37,7 @@ concurrency:
 
 jobs:
   nod-paper2-temporal:
-    runs-on: [self-hosted, Windows]
+    runs-on: [self-hosted, Linux]
     timeout-minutes: 720
 
     steps:
@@ -45,14 +45,15 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Install dependencies
-        shell: cmd
+        shell: bash
         run: |
-          py -${{ inputs.python_version }} --version
-          py -${{ inputs.python_version }} -m pip install --upgrade pip
-          py -${{ inputs.python_version }} -m pip install poetry
-          for /f "delims=" %%P in ('py -${{ inputs.python_version }} -c "import sys; print(sys.executable)"') do set "PYTHON_EXE=%%P"
-          py -${{ inputs.python_version }} -m poetry env use "%PYTHON_EXE%"
-          py -${{ inputs.python_version }} -m poetry install
+          PYTHON_CMD="python${{ inputs.python_version }}"
+          "$PYTHON_CMD" --version
+          "$PYTHON_CMD" -m pip install --upgrade pip
+          "$PYTHON_CMD" -m pip install poetry
+          PYTHON_EXE="$($PYTHON_CMD -c 'import sys; print(sys.executable)')"
+          "$PYTHON_CMD" -m poetry env use "$PYTHON_EXE"
+          "$PYTHON_CMD" -m poetry install
 
       - name: Run Paper 2 workflow
         shell: pwsh
@@ -78,7 +79,8 @@ jobs:
           if ($paperExportDir) {
             $workflowArgs += @("--paper-export-dir", $paperExportDir)
           }
-          py -${{ inputs.python_version }} -m poetry run python -m reptrace.paper2_workflow @workflowArgs
+          $pythonCmd = "python${{ inputs.python_version }}"
+          & $pythonCmd -m poetry run python -m reptrace.paper2_workflow @workflowArgs
 
       - name: Upload compact Paper 2 artifacts
         uses: actions/upload-artifact@v6
