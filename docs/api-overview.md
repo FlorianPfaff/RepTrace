@@ -25,3 +25,6 @@ RepTrace currently exposes these small modules:
 - `reptrace.validate_manifest` checks staged files and metadata before decoding.
 - `reptrace.mne_time_decode` provides the MNE epochs decoding command-line
   workflow, including optional held-out probability observation exports.
+- `reptrace.onset_detection` detects first threshold crossings from probability
+  observations and reports latency, false-alarm, and correct-at-detection
+  summaries.

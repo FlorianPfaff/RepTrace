@@ -15,6 +15,8 @@ RepTrace currently provides tools for:
 - time-resolved decoding from MNE `Epochs` files;
 - held-out trial/time probability observation exports for downstream state
   models;
+- onset-detection summaries from probability traces, with baseline-window
+  thresholds, false-alarm rates, and detection latencies;
 - conservative sticky switching models for probability traces with shuffled
   time, shuffled label, and baseline-window controls;
 - category-conditioned semantic stage summaries for asking whether decoded
@@ -82,6 +84,18 @@ python -m reptrace.plot_time_decode \
   results/nod_sub-01_animate.csv \
   --chance 0.5 \
   --out results/nod_sub-01_animate.png
+```
+
+Detect the first threshold-crossing representation time from probability
+observations:
+
+```bash
+python -m reptrace.onset_detection \
+  results/nod_sub-01_animate_observations.csv \
+  --threshold-window -0.35 -0.05 \
+  --threshold-quantile 0.95 \
+  --out-events results/nod_sub-01_animate_onset_events.csv \
+  --out-summary results/nod_sub-01_animate_onset_summary.csv
 ```
 
 If the events CSV has the NOD `stim_is_animate` column but no named decoding
