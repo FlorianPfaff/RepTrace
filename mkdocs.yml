@@ -1,5 +1,5 @@
 site_name: RepTrace
-site_description: Probabilistic tracing of neural representations over time.
+site_description: Probabilistic tracing of neural representations over time
 repo_url: https://github.com/FlorianPfaff/RepTrace
 repo_name: FlorianPfaff/RepTrace
 
@@ -8,10 +8,8 @@ nav:
   - Getting Started: getting-started.md
   - Data Staging: data-staging.md
   - Benchmarking: benchmarking.md
-  - Examples: examples.md
   - API Overview: api-overview.md
-  - API Reference:
-      - Reference Index: reference/index.md
+  - Reference:
       - Benchmark: reference/benchmark.md
       - Calibration: reference/calibration.md
       - Decoding: reference/decoding.md
@@ -20,29 +18,28 @@ nav:
       - Metadata: reference/metadata.md
       - Metrics: reference/metrics.md
       - Onset Detection: reference/onset-detection.md
+      - Onset Workflow: reference/onset-workflow.md
+      - Onset Sensitivity: reference/onset-sensitivity.md
       - Paired Statistics: reference/paired-stats.md
       - Paper 2 Workflow: reference/paper2-workflow.md
       - Results: reference/results.md
       - Semantic Stages: reference/semantic-stages.md
       - Temporal Model: reference/temporal-model.md
-      - Plotting: reference/plotting.md
-      - Report: reference/report.md
-      - Validation: reference/validation.md
 
 theme:
-  name: mkdocs
+  name: material
+  features:
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
 
 plugins:
   - search
   - mkdocstrings:
       handlers:
         python:
-          paths:
-            - src
+          paths: [src]
           options:
-            docstring_style: sphinx
-            show_if_no_docstring: true
-            show_source: false
-            members_order: source
-
-strict: true
+            docstring_style: numpy
+            show_source: true
+            show_root_heading: true

@@ -41,6 +41,8 @@ docs/_build/
 # Data and benchmark outputs
 data/
 results/
+!src/reptrace/results/
+!src/reptrace/results/*.py
 *.fif
 *.h5
 *.hdf5
