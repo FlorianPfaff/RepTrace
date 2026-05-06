@@ -233,3 +233,16 @@ def prediction_scores(model: Any, features: Sequence[Sequence[float]] | np.ndarr
         scores = np.asarray(model.predict_proba(features), dtype=float)
         return np.max(scores, axis=1)
     return np.full(features.shape[0], np.nan, dtype=float)
+
+
+def positive_class_score(model: Any, features: Sequence[Sequence[float]] | np.ndarray) -> np.ndarray:
+    """Return a binary model's score for the positive class."""
+
+    features = np.asarray(features, dtype=float)
+    if features.ndim != 2:
+        raise ValueError("features must be a two-dimensional feature matrix.")
+    if hasattr(model, "decision_function"):
+        return np.asarray(model.decision_function(features), dtype=float)
+    if hasattr(model, "predict_proba"):
+        return np.asarray(model.predict_proba(features), dtype=float)[:, 1]
+    return np.asarray(model.predict(features), dtype=float)
