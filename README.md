@@ -195,7 +195,7 @@ If you use **RepTrace** in your research, please cite the repository for now:
   author = {Florian Pfaff},
   title = {RepTrace: Probabilistic Tracing of Neural Representations over Time},
   year = {2026},
-  url = {https://github.com/FlorianPfaff/RepTrace},
+  url = {https://github.com/IPS-Stuttgart/RepTrace},
   license = {MIT}
 }
 ```

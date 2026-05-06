@@ -7,7 +7,7 @@ authors:
     given-names: "Florian"
     affiliation: "Institute of Industrial Automation and Software Engineering (IAS), University of Stuttgart"
     email: "pfaff@ias.uni-stuttgart.de"
-repository-code: "https://github.com/FlorianPfaff/RepTrace"
+repository-code: "https://github.com/IPS-Stuttgart/RepTrace"
 license: "MIT"
 abstract: >
   RepTrace is an early-stage Python toolkit for benchmarking calibrated,
@@ -28,5 +28,5 @@ preferred-citation:
     - family-names: "Pfaff"
       given-names: "Florian"
   year: 2026
-  url: "https://github.com/FlorianPfaff/RepTrace"
+  url: "https://github.com/IPS-Stuttgart/RepTrace"
   license: "MIT"
