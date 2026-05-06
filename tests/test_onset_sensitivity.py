@@ -53,8 +53,21 @@ def test_build_sensitivity_settings_crosses_parameters():
     )
 
     assert len(settings) == 8
-    assert settings[0].setting_id == "q0900_c01_dnone_anypred"
-    assert settings[-1].setting_id == "q0950_c02_dnone_stable"
+    assert settings[0].setting_id == "point_q0900_c01_dnone_anypred"
+    assert settings[-1].setting_id == "point_q0950_c02_dnone_stable"
+
+
+def test_build_sensitivity_settings_can_compare_threshold_methods():
+    settings = build_sensitivity_settings(
+        threshold_methods=("point", "max_run"),
+        threshold_quantiles=(0.95,),
+    )
+
+    assert [setting.threshold_method for setting in settings] == ["point", "max_run"]
+    assert [setting.setting_id for setting in settings] == [
+        "point_q0950_c01_dnone_anypred",
+        "maxrun_q0950_c01_dnone_anypred",
+    ]
 
 
 def test_summarize_sensitivity_reports_latency_spread():
@@ -93,6 +106,7 @@ def test_run_onset_sensitivity_writes_summaries_and_plot(tmp_path: Path):
         [task_a, task_b],
         out_dir=tmp_path / "onset_sensitivity_all",
         threshold_window=(-0.1, 0.0),
+        threshold_methods=("point", "max_run"),
         threshold_quantiles=(0.8, 0.9),
         detection_start=0.0,
         min_consecutive_values=(1, 2),
@@ -100,7 +114,7 @@ def test_run_onset_sensitivity_writes_summaries_and_plot(tmp_path: Path):
         plot_out=tmp_path / "onset_sensitivity_all" / "sensitivity.png",
     )
 
-    assert len(run.settings) == 8
+    assert len(run.settings) == 16
     assert run.sensitivity_summary_csv.exists()
     assert run.robustness_summary_csv.exists()
     assert run.plot_path is not None
@@ -110,8 +124,8 @@ def test_run_onset_sensitivity_writes_summaries_and_plot(tmp_path: Path):
     robustness = pd.read_csv(run.robustness_summary_csv)
     assert set(sensitivity["task"]) == {"nod_animate_all", "nod_canine_device_all"}
     assert set(robustness["task"]) == {"nod_animate_all", "nod_canine_device_all"}
-    assert sensitivity["setting_id"].nunique() == 8
-    assert robustness["n_settings"].min() == 8
+    assert sensitivity["setting_id"].nunique() == 16
+    assert robustness["n_settings"].min() == 16
 
 
 def test_run_onset_sensitivity_allows_missing_tasks(tmp_path: Path):

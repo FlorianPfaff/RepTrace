@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from reptrace.onset_detection import DEFAULT_THRESHOLD_QUANTILE, DEFAULT_THRESHOLD_WINDOW
+from reptrace.onset_detection import DEFAULT_THRESHOLD_QUANTILE, DEFAULT_THRESHOLD_WINDOW, THRESHOLD_METHODS
 from reptrace.onset_workflow import DEFAULT_OBSERVATIONS_GLOB, _expand_task_dirs, run_onset_workflow
 
 
@@ -21,6 +21,7 @@ from reptrace.onset_workflow import DEFAULT_OBSERVATIONS_GLOB, _expand_task_dirs
 class OnsetSensitivitySetting:
     """One onset-detection parameter setting to evaluate."""
 
+    threshold_method: str
     threshold_quantile: float
     min_consecutive: int
     min_duration: float | None = None
@@ -28,11 +29,12 @@ class OnsetSensitivitySetting:
 
     @property
     def setting_id(self) -> str:
+        method = self.threshold_method.replace("_", "")
         quantile = f"q{int(round(self.threshold_quantile * 1000)):04d}"
         consecutive = f"c{self.min_consecutive:02d}"
         duration = "dnone" if self.min_duration is None else f"d{int(round(self.min_duration * 1000)):04d}ms"
         stable = "stable" if self.require_stable_prediction else "anypred"
-        return "_".join([quantile, consecutive, duration, stable])
+        return "_".join([method, quantile, consecutive, duration, stable])
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,7 @@ class OnsetSensitivityRun:
 
 def build_sensitivity_settings(
     *,
+    threshold_methods: list[str] | tuple[str, ...] = ("point",),
     threshold_quantiles: list[float] | tuple[float, ...] = (DEFAULT_THRESHOLD_QUANTILE,),
     min_consecutive_values: list[int] | tuple[int, ...] = (1,),
     min_duration_values: list[float | None] | tuple[float | None, ...] | None = None,
@@ -58,12 +61,15 @@ def build_sensitivity_settings(
     if min_duration_values is None:
         min_duration_values = (None,)
     settings = []
-    for threshold_quantile, min_consecutive, min_duration, stable_prediction in itertools.product(
+    for threshold_method, threshold_quantile, min_consecutive, min_duration, stable_prediction in itertools.product(
+        threshold_methods,
         threshold_quantiles,
         min_consecutive_values,
         min_duration_values,
         stable_prediction_values,
     ):
+        if threshold_method not in THRESHOLD_METHODS:
+            raise ValueError(f"threshold methods must be one of {THRESHOLD_METHODS}.")
         if not 0.0 <= threshold_quantile <= 1.0:
             raise ValueError("threshold quantiles must be between 0 and 1.")
         if min_consecutive < 1:
@@ -72,6 +78,7 @@ def build_sensitivity_settings(
             raise ValueError("min_duration values must be non-negative.")
         settings.append(
             OnsetSensitivitySetting(
+                threshold_method=threshold_method,
                 threshold_quantile=float(threshold_quantile),
                 min_consecutive=int(min_consecutive),
                 min_duration=None if min_duration is None else float(min_duration),
@@ -87,6 +94,7 @@ def _read_setting_summary(path: Path, setting: OnsetSensitivitySetting) -> pd.Da
     frame.insert(0, "min_duration_setting", np.nan if setting.min_duration is None else setting.min_duration)
     frame.insert(0, "min_consecutive_setting", setting.min_consecutive)
     frame.insert(0, "threshold_quantile_setting", setting.threshold_quantile)
+    frame.insert(0, "threshold_method_setting", setting.threshold_method)
     frame.insert(0, "setting_id", setting.setting_id)
     return frame
 
@@ -197,6 +205,7 @@ def run_onset_sensitivity(
     out_dir: Path,
     observations_glob: str = DEFAULT_OBSERVATIONS_GLOB,
     threshold_window: tuple[float, float] = DEFAULT_THRESHOLD_WINDOW,
+    threshold_methods: list[str] | tuple[str, ...] = ("point",),
     threshold_quantiles: list[float] | tuple[float, ...] = (DEFAULT_THRESHOLD_QUANTILE,),
     detection_start: float | None = None,
     min_consecutive_values: list[int] | tuple[int, ...] = (1,),
@@ -210,6 +219,7 @@ def run_onset_sensitivity(
 
     stable_values = (False, True) if include_stable_prediction else (False,)
     settings = build_sensitivity_settings(
+        threshold_methods=threshold_methods,
         threshold_quantiles=threshold_quantiles,
         min_consecutive_values=min_consecutive_values,
         min_duration_values=min_duration_values,
@@ -227,6 +237,7 @@ def run_onset_sensitivity(
             out_dir=setting_dir,
             observations_glob=observations_glob,
             threshold_window=threshold_window,
+            threshold_method=setting.threshold_method,
             threshold_quantile=setting.threshold_quantile,
             score_column=score_column,
             detection_start=detection_start,
@@ -278,6 +289,7 @@ def main() -> None:
         metavar=("START", "STOP"),
     )
     parser.add_argument("--threshold-quantiles", nargs="+", type=float, default=[0.90, 0.95, 0.975])
+    parser.add_argument("--threshold-methods", nargs="+", choices=THRESHOLD_METHODS, default=["point"])
     parser.add_argument("--detection-start", type=float)
     parser.add_argument("--min-consecutive-values", nargs="+", type=int, default=[1, 2, 3])
     parser.add_argument("--min-duration-values", nargs="*", type=float)
@@ -292,6 +304,7 @@ def main() -> None:
         out_dir=args.out_dir,
         observations_glob=args.observations_glob,
         threshold_window=tuple(args.threshold_window),
+        threshold_methods=tuple(args.threshold_methods),
         threshold_quantiles=tuple(args.threshold_quantiles),
         detection_start=args.detection_start,
         min_consecutive_values=tuple(args.min_consecutive_values),
