@@ -24,7 +24,7 @@ from reptrace.validate_manifest import validate_manifest, validation_report_fram
 
 
 @dataclass(frozen=True)
-class Paper2Task:
+class TemporalStateTask:
     """One NOD task used in the calibration-aware temporal-state workflow."""
 
     task_id: str
@@ -33,10 +33,10 @@ class Paper2Task:
 
 
 @dataclass(frozen=True)
-class Paper2TaskOutput:
-    """Compact paths produced for one Paper 2 task."""
+class TemporalStateTaskOutput:
+    """Compact paths produced for one temporal-state task."""
 
-    task: Paper2Task
+    task: TemporalStateTask
     task_dir: Path
     manifest_csv: Path
     validation_csv: Path
@@ -50,30 +50,30 @@ class Paper2TaskOutput:
 
 
 @dataclass(frozen=True)
-class Paper2WorkflowRun:
-    """Top-level Paper 2 workflow outputs."""
+class TemporalStateWorkflowRun:
+    """Top-level calibration-aware temporal-state workflow outputs."""
 
     out_dir: Path
-    task_outputs: list[Paper2TaskOutput]
-    paper2_summary_csv: Path
-    paper2_figure: Path
-    paper2_report: Path
+    task_outputs: list[TemporalStateTaskOutput]
+    temporal_state_summary_csv: Path
+    temporal_state_figure: Path
+    evidence_report: Path
     command_log: Path
     exported_artifacts: list[Path]
 
 
 DEFAULT_TASKS = (
-    Paper2Task("nod_animate", "NOD animate/inanimate", "nod_animate_all.csv"),
-    Paper2Task("nod_canine_device", "NOD canine/device", "nod_superclass_canine_device_all.csv"),
-    Paper2Task("nod_container_covering", "NOD container/covering", "nod_superclass_container_covering_all.csv"),
+    TemporalStateTask("nod_animate", "NOD animate/inanimate", "nod_animate_all.csv"),
+    TemporalStateTask("nod_canine_device", "NOD canine/device", "nod_superclass_canine_device_all.csv"),
+    TemporalStateTask("nod_container_covering", "NOD container/covering", "nod_superclass_container_covering_all.csv"),
 )
 DEFAULT_TASK_IDS = tuple(task.task_id for task in DEFAULT_TASKS)
 DEFAULT_DECODERS = ("logistic", "linear_svm")
-PAPER2_COMPACT_PATTERNS = (
-    "paper2_summary.csv",
-    "paper2_stage_reliability.png",
-    "paper2_evidence.md",
-    "paper2_commands.md",
+TEMPORAL_STATE_COMPACT_PATTERNS = (
+    "temporal_state_summary.csv",
+    "temporal_state_reliability.png",
+    "temporal_state_evidence.md",
+    "temporal_state_commands.md",
     "temporal_model_all.csv",
     "emission_compare_all.csv",
     "semantic_stage_time_all.csv",
@@ -100,13 +100,13 @@ def _normal_decoders(decoders: tuple[str, ...] | list[str]) -> tuple[str, ...]:
     return tuple(normalize_decoder_name(decoder) for decoder in decoders)
 
 
-def _selected_tasks(task_ids: tuple[str, ...] | list[str] | None) -> tuple[Paper2Task, ...]:
+def _selected_tasks(task_ids: tuple[str, ...] | list[str] | None) -> tuple[TemporalStateTask, ...]:
     tasks_by_id = {task.task_id: task for task in DEFAULT_TASKS}
     if task_ids is None:
         return DEFAULT_TASKS
     unknown = sorted(set(task_ids).difference(tasks_by_id))
     if unknown:
-        raise ValueError(f"Unknown Paper 2 task(s): {', '.join(unknown)}")
+        raise ValueError(f"Unknown temporal-state task(s): {', '.join(unknown)}")
     return tuple(tasks_by_id[task_id] for task_id in task_ids)
 
 
@@ -117,7 +117,7 @@ def _display_path(path: Path, base: Path) -> str:
         return str(path)
 
 
-def prepare_paper2_manifest(
+def prepare_temporal_state_manifest(
     source_manifest: Path,
     out_manifest: Path,
     *,
@@ -182,7 +182,7 @@ def _read_optional_csv(path: Path) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def _tagged_csv(task_output: Paper2TaskOutput, path: Path) -> pd.DataFrame:
+def _tagged_csv(task_output: TemporalStateTaskOutput, path: Path) -> pd.DataFrame:
     frame = _read_optional_csv(path)
     if frame.empty:
         return frame
@@ -191,7 +191,7 @@ def _tagged_csv(task_output: Paper2TaskOutput, path: Path) -> pd.DataFrame:
     return frame
 
 
-def _write_combined_csv(task_outputs: list[Paper2TaskOutput], attr_name: str, out_csv: Path) -> pd.DataFrame:
+def _write_combined_csv(task_outputs: list[TemporalStateTaskOutput], attr_name: str, out_csv: Path) -> pd.DataFrame:
     frames = []
     for task_output in task_outputs:
         frames.append(_tagged_csv(task_output, getattr(task_output, attr_name)))
@@ -231,8 +231,8 @@ def _stage_stats(stages: pd.DataFrame, stage_time: pd.DataFrame, task: str, deco
     }
 
 
-def build_paper2_summary(emission_compare: pd.DataFrame, stages: pd.DataFrame, stage_time: pd.DataFrame) -> pd.DataFrame:
-    """Build the central compact table for the Paper 2 evidence note."""
+def build_temporal_state_summary(emission_compare: pd.DataFrame, stages: pd.DataFrame, stage_time: pd.DataFrame) -> pd.DataFrame:
+    """Build the central compact table for the temporal-state evidence note."""
     if emission_compare.empty:
         return pd.DataFrame()
 
@@ -259,22 +259,22 @@ def build_paper2_summary(emission_compare: pd.DataFrame, stages: pd.DataFrame, s
     return pd.DataFrame(rows).sort_values(["task", "decoder"]).reset_index(drop=True)
 
 
-def plot_paper2_stage_reliability(
-    paper2_summary: pd.DataFrame,
+def plot_temporal_state_reliability(
+    temporal_state_summary: pd.DataFrame,
     stage_time: pd.DataFrame,
     out_path: Path,
     *,
     plot_decoder: str | None = None,
 ) -> Path:
-    """Plot the Paper 2 control-margin and semantic-stage reliability summary."""
+    """Plot the calibration-aware temporal-state control-margin and semantic-stage reliability summary."""
     fig, axes = plt.subplots(1, 2, figsize=(11.0, 4.2))
 
     ax = axes[0]
-    if paper2_summary.empty:
+    if temporal_state_summary.empty:
         ax.text(0.5, 0.5, "No emission comparison rows", ha="center", va="center")
         ax.axis("off")
     else:
-        summary = paper2_summary.copy()
+        summary = temporal_state_summary.copy()
         task_labels = list(dict.fromkeys(summary["task_label"].astype(str)))
         decoders = list(dict.fromkeys(summary["decoder"].astype(str)))
         width = 0.8 / max(len(decoders), 1)
@@ -339,17 +339,17 @@ def _markdown_table(frame: pd.DataFrame, columns: list[str]) -> list[str]:
 
 
 def build_evidence_report(
-    paper2_summary: pd.DataFrame,
+    temporal_state_summary: pd.DataFrame,
     *,
     out_dir: Path,
-    paper2_summary_csv: Path,
+    temporal_state_summary_csv: Path,
     figure_path: Path,
     temporal_all_csv: Path,
     emission_all_csv: Path,
     stage_time_all_csv: Path,
     stages_all_csv: Path,
 ) -> str:
-    """Build a compact Paper 2 evidence note from generated artifacts."""
+    """Build a compact temporal-state evidence note from generated artifacts."""
     columns = [
         "task_label",
         "decoder",
@@ -362,17 +362,17 @@ def build_evidence_report(
         "uncalibrated_peak_n_subjects",
     ]
     lines = [
-        "# Paper 2 Evidence: Calibration-Aware Temporal State Inference",
+        "# Evidence: Calibration-Aware Temporal State Inference",
         "",
         "Central claim under test: calibrated decoder probabilities can change downstream temporal state inference, not only reported uncertainty.",
         "",
         "## Central Table",
         "",
-        *_markdown_table(paper2_summary, [column for column in columns if column in paper2_summary.columns]),
+        *_markdown_table(temporal_state_summary, [column for column in columns if column in temporal_state_summary.columns]),
         "",
         "## Compact Artifacts",
         "",
-        f"- Central table: `{_display_path(paper2_summary_csv, out_dir)}`",
+        f"- Central table: `{_display_path(temporal_state_summary_csv, out_dir)}`",
         f"- Summary figure: `{_display_path(figure_path, out_dir)}`",
         f"- Temporal model rows: `{_display_path(temporal_all_csv, out_dir)}`",
         f"- Emission comparison rows: `{_display_path(emission_all_csv, out_dir)}`",
@@ -381,7 +381,7 @@ def build_evidence_report(
         "",
         "## Reading Rule",
         "",
-        "The primary Paper 2 metric is `delta_control_margin`: calibrated observed effect-window persistence gain minus the strongest calibrated control, compared with the same uncalibrated margin. Positive values favor calibrated emissions. Semantic-stage rows are supporting evidence and should be interpreted only together with the shuffled-time, shuffled-label, and baseline-window controls.",
+        "The primary temporal-state metric is `delta_control_margin`: calibrated observed effect-window persistence gain minus the strongest calibrated control, compared with the same uncalibrated margin. Positive values favor calibrated emissions. Semantic-stage rows are supporting evidence and should be interpreted only together with the shuffled-time, shuffled-label, and baseline-window controls.",
         "",
     ]
     return "\n".join(lines)
@@ -391,13 +391,13 @@ def _write_command_log(
     out_path: Path,
     *,
     command_line: str,
-    task_outputs: list[Paper2TaskOutput],
+    task_outputs: list[TemporalStateTaskOutput],
     decoders: tuple[str, ...],
     n_permutations: int,
     stay_grid_size: int,
 ) -> None:
     lines = [
-        "# Paper 2 RepTrace Commands",
+        "# Calibration-Aware Temporal State Commands",
         "",
         "Top-level command:",
         "",
@@ -428,30 +428,30 @@ def _write_command_log(
     out_path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def _collect_compact_artifacts(source_dir: Path, patterns: tuple[str, ...] = PAPER2_COMPACT_PATTERNS) -> list[Path]:
+def _collect_compact_artifacts(source_dir: Path, patterns: tuple[str, ...] = TEMPORAL_STATE_COMPACT_PATTERNS) -> list[Path]:
     artifacts: list[Path] = []
     for pattern in patterns:
         artifacts.extend(path for path in source_dir.glob(pattern) if path.is_file())
     return sorted(set(artifacts))
 
 
-def export_paper2_artifacts(
+def export_temporal_state_artifacts(
     source_dir: Path,
     destination_dir: Path,
     *,
     max_mb: float = 50.0,
     dry_run: bool = False,
 ) -> list[Path]:
-    """Copy compact Paper 2 artifacts to the paper repository."""
+    """Copy compact temporal-state artifacts to the compact export directory."""
     source_dir = source_dir.resolve()
     destination_dir = destination_dir.resolve()
     artifacts = _collect_compact_artifacts(source_dir)
     if not artifacts:
-        raise FileNotFoundError(f"No compact Paper 2 artifacts found in {source_dir}.")
+        raise FileNotFoundError(f"No compact temporal-state artifacts found in {source_dir}.")
 
     size_mb = sum(path.stat().st_size for path in artifacts) / (1024 * 1024)
     if size_mb > max_mb:
-        raise ValueError(f"Compact Paper 2 artifacts are {size_mb:.2f} MB, above limit {max_mb:.2f} MB.")
+        raise ValueError(f"Compact temporal-state artifacts are {size_mb:.2f} MB, above limit {max_mb:.2f} MB.")
     if dry_run:
         return artifacts
 
@@ -465,11 +465,11 @@ def export_paper2_artifacts(
     return copied
 
 
-def run_paper2_workflow(
+def run_temporal_state_workflow(
     *,
     out_dir: Path,
     data_root: Path | None = None,
-    paper_export_dir: Path | None = None,
+    compact_export_dir: Path | None = None,
     task_ids: tuple[str, ...] | None = None,
     decoders: tuple[str, ...] = DEFAULT_DECODERS,
     n_permutations: int = 100,
@@ -482,21 +482,21 @@ def run_paper2_workflow(
     expected_subjects: int | None = 19,
     resume: bool = True,
     max_export_mb: float = 50.0,
-    command_line: str = "python -m reptrace.paper2_workflow",
-) -> Paper2WorkflowRun:
-    """Run the reproducible Paper 2 NOD temporal-state workflow."""
+    command_line: str = "python -m reptrace.temporal_state_workflow",
+) -> TemporalStateWorkflowRun:
+    """Run the reproducible calibration-aware NOD temporal-state workflow."""
     repo_root = _repo_root()
     out_dir = out_dir.resolve()
     tasks = _selected_tasks(task_ids)
     decoders = _normal_decoders(decoders)
-    task_outputs: list[Paper2TaskOutput] = []
+    task_outputs: list[TemporalStateTaskOutput] = []
 
     for task in tasks:
         task_dir = out_dir / task.task_id
         manifest_csv = task_dir / "manifest.csv"
         validation_csv = task_dir / "validation.csv"
         source_manifest = repo_root / "benchmarks" / task.manifest_name
-        prepare_paper2_manifest(
+        prepare_temporal_state_manifest(
             source_manifest,
             manifest_csv,
             data_root=data_root,
@@ -557,7 +557,7 @@ def run_paper2_workflow(
             pass
 
         task_outputs.append(
-            Paper2TaskOutput(
+            TemporalStateTaskOutput(
                 task=task,
                 task_dir=task_dir,
                 manifest_csv=manifest_csv,
@@ -581,18 +581,18 @@ def run_paper2_workflow(
     stage_time = _write_combined_csv(task_outputs, "semantic_time_csv", stage_time_all_csv)
     stages = _write_combined_csv(task_outputs, "semantic_stages_csv", stages_all_csv)
 
-    paper2_summary = build_paper2_summary(emission_compare, stages, stage_time)
-    paper2_summary_csv = out_dir / "paper2_summary.csv"
-    paper2_summary.to_csv(paper2_summary_csv, index=False)
-    paper2_figure = out_dir / "paper2_stage_reliability.png"
-    plot_paper2_stage_reliability(paper2_summary, stage_time, paper2_figure)
-    paper2_report = out_dir / "paper2_evidence.md"
-    paper2_report.write_text(
+    temporal_state_summary = build_temporal_state_summary(emission_compare, stages, stage_time)
+    temporal_state_summary_csv = out_dir / "temporal_state_summary.csv"
+    temporal_state_summary.to_csv(temporal_state_summary_csv, index=False)
+    temporal_state_figure = out_dir / "temporal_state_reliability.png"
+    plot_temporal_state_reliability(temporal_state_summary, stage_time, temporal_state_figure)
+    evidence_report = out_dir / "temporal_state_evidence.md"
+    evidence_report.write_text(
         build_evidence_report(
-            paper2_summary,
+            temporal_state_summary,
             out_dir=out_dir,
-            paper2_summary_csv=paper2_summary_csv,
-            figure_path=paper2_figure,
+            temporal_state_summary_csv=temporal_state_summary_csv,
+            figure_path=temporal_state_figure,
             temporal_all_csv=temporal_all_csv,
             emission_all_csv=emission_all_csv,
             stage_time_all_csv=stage_time_all_csv,
@@ -600,7 +600,7 @@ def run_paper2_workflow(
         ),
         encoding="utf-8",
     )
-    command_log = out_dir / "paper2_commands.md"
+    command_log = out_dir / "temporal_state_commands.md"
     _write_command_log(
         command_log,
         command_line=command_line,
@@ -611,25 +611,25 @@ def run_paper2_workflow(
     )
 
     exported_artifacts: list[Path] = []
-    if paper_export_dir is not None:
-        exported_artifacts = export_paper2_artifacts(out_dir, paper_export_dir, max_mb=max_export_mb)
+    if compact_export_dir is not None:
+        exported_artifacts = export_temporal_state_artifacts(out_dir, compact_export_dir, max_mb=max_export_mb)
 
-    return Paper2WorkflowRun(
+    return TemporalStateWorkflowRun(
         out_dir=out_dir,
         task_outputs=task_outputs,
-        paper2_summary_csv=paper2_summary_csv,
-        paper2_figure=paper2_figure,
-        paper2_report=paper2_report,
+        temporal_state_summary_csv=temporal_state_summary_csv,
+        temporal_state_figure=temporal_state_figure,
+        evidence_report=evidence_report,
         command_log=command_log,
         exported_artifacts=exported_artifacts,
     )
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the RepTrace Paper 2 calibration-aware temporal-state workflow.")
-    parser.add_argument("--out-dir", type=Path, default=Path("results/paper2_temporal_state_inference"))
+    parser = argparse.ArgumentParser(description="Run the RepTrace calibration-aware temporal-state workflow.")
+    parser.add_argument("--out-dir", type=Path, default=Path("results/temporal_state_inference"))
     parser.add_argument("--data-root", type=Path, help="Directory containing staged NOD sub-*_epo.fif and sub-*_events.csv files.")
-    parser.add_argument("--paper-export-dir", type=Path, help="Optional paper-repo result directory for compact artifacts.")
+    parser.add_argument("--compact-export-dir", type=Path, help="Optional directory for compact exported artifacts.")
     parser.add_argument("--task", action="append", choices=DEFAULT_TASK_IDS, dest="task_ids", help="Task to run. Repeat to select multiple tasks.")
     parser.add_argument("--decoders", nargs="+", choices=DECODER_CHOICES, default=list(DEFAULT_DECODERS))
     parser.add_argument("--n-permutations", type=int, default=100)
@@ -644,11 +644,11 @@ def main() -> None:
     parser.add_argument("--max-export-mb", type=float, default=50.0)
     args = parser.parse_args()
 
-    command_line = "python -m reptrace.paper2_workflow " + " ".join(sys.argv[1:])
-    run = run_paper2_workflow(
+    command_line = "python -m reptrace.temporal_state_workflow " + " ".join(sys.argv[1:])
+    run = run_temporal_state_workflow(
         out_dir=args.out_dir,
         data_root=args.data_root,
-        paper_export_dir=args.paper_export_dir,
+        compact_export_dir=args.compact_export_dir,
         task_ids=tuple(args.task_ids) if args.task_ids else None,
         decoders=tuple(args.decoders),
         n_permutations=args.n_permutations,
@@ -663,9 +663,9 @@ def main() -> None:
         max_export_mb=args.max_export_mb,
         command_line=command_line,
     )
-    print(f"Wrote Paper 2 summary: {run.paper2_summary_csv}")
-    print(f"Wrote Paper 2 figure: {run.paper2_figure}")
-    print(f"Wrote Paper 2 evidence note: {run.paper2_report}")
+    print(f"Wrote temporal-state summary: {run.temporal_state_summary_csv}")
+    print(f"Wrote temporal-state figure: {run.temporal_state_figure}")
+    print(f"Wrote temporal-state evidence note: {run.evidence_report}")
     if run.exported_artifacts:
         size_mb = sum(path.stat().st_size for path in run.exported_artifacts) / (1024 * 1024)
         print(f"Exported {len(run.exported_artifacts)} compact artifact(s), {size_mb:.3f} MB.")

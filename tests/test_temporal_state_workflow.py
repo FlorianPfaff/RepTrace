@@ -3,11 +3,11 @@ from pathlib import Path
 import pandas as pd
 
 from reptrace.benchmark import BenchmarkRun
-from reptrace.paper2_workflow import prepare_paper2_manifest, run_paper2_workflow
+from reptrace.temporal_state_workflow import prepare_temporal_state_manifest, run_temporal_state_workflow
 from reptrace.validate_manifest import ManifestValidation
 
 
-def test_prepare_paper2_manifest_rewrites_data_root_and_adds_decoders(tmp_path: Path):
+def test_prepare_temporal_state_manifest_rewrites_data_root_and_adds_decoders(tmp_path: Path):
     source = tmp_path / "source.csv"
     source.write_text(
         "subject,epochs,events_csv,source_column,positive_pattern,label_column\n"
@@ -16,7 +16,7 @@ def test_prepare_paper2_manifest_rewrites_data_root_and_adds_decoders(tmp_path: 
         encoding="utf-8",
     )
 
-    prepared = prepare_paper2_manifest(
+    prepared = prepare_temporal_state_manifest(
         source,
         tmp_path / "prepared.csv",
         data_root=tmp_path / "nod",
@@ -121,27 +121,27 @@ def _fake_benchmark(manifest_csv: Path, *, out_dir: Path, aggregate_out: Path, p
     return BenchmarkRun(result_csvs=result_csvs, aggregate_csv=aggregate_out, plot_path=plot_out, calibration_csvs=[], observation_csvs=observation_csvs)
 
 
-def test_run_paper2_workflow_builds_compact_outputs_and_exports(tmp_path: Path, monkeypatch):
+def test_run_temporal_state_workflow_builds_compact_outputs_and_exports(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
-        "reptrace.paper2_workflow.validate_manifest",
+        "reptrace.temporal_state_workflow.validate_manifest",
         lambda manifest_csv: [ManifestValidation(subject="sub-01", ok=True, messages=[])],
     )
-    monkeypatch.setattr("reptrace.paper2_workflow.run_benchmark_manifest", _fake_benchmark)
+    monkeypatch.setattr("reptrace.temporal_state_workflow.run_benchmark_manifest", _fake_benchmark)
 
-    run = run_paper2_workflow(
-        out_dir=tmp_path / "paper2",
-        paper_export_dir=tmp_path / "paper_repo" / "results" / "paper2_temporal_state_inference",
+    run = run_temporal_state_workflow(
+        out_dir=tmp_path / "temporal_state",
+        compact_export_dir=tmp_path / "compact_results" / "results" / "temporal_state_inference",
         task_ids=("nod_animate",),
         decoders=("linear_svm",),
         n_permutations=3,
         stay_grid_size=12,
         max_subjects=1,
-        command_line="python -m reptrace.paper2_workflow --task nod_animate",
+        command_line="python -m reptrace.temporal_state_workflow --task nod_animate",
     )
 
-    summary = pd.read_csv(run.paper2_summary_csv)
-    assert run.paper2_figure.exists()
-    assert run.paper2_report.exists()
+    summary = pd.read_csv(run.temporal_state_summary_csv)
+    assert run.temporal_state_figure.exists()
+    assert run.evidence_report.exists()
     assert run.command_log.exists()
     assert summary["task"].tolist() == ["nod_animate"]
     assert summary["decoder"].tolist() == ["linear_svm"]
