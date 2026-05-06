@@ -24,6 +24,7 @@ nav:
       - Paper 2 Workflow: reference/paper2-workflow.md
       - Results: reference/results.md
       - Semantic Stages: reference/semantic-stages.md
+      - Temporal Generalization: reference/temporal-generalization.md
       - Temporal Model: reference/temporal-model.md
 
 theme:
