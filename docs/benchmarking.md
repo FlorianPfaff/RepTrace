@@ -385,7 +385,7 @@ For decoder comparisons, the report includes both raw effect-window accuracy
 and effect minus baseline-window accuracy. The baseline-corrected value is the
 more relevant reported number when a decoder shows pre-stimulus bias.
 
-Create a calibration-first decoder report and aggregate reliability bins:
+Create a calibration-aware decoder report and aggregate reliability bins:
 
 ```bash
 python -m reptrace.calibration \

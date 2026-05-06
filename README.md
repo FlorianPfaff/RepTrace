@@ -25,7 +25,7 @@ RepTrace currently provides tools for:
   analyses;
 - calibrated classification metrics, including Brier score and expected
   calibration error;
-- calibration-first reports and reliability-bin diagnostics;
+- calibration-aware reports and reliability-bin diagnostics;
 - standard decoder baselines, including logistic regression, LDA, and
   calibrated linear SVM;
 - grouped cross-validation for session- or run-aware benchmarks; and
