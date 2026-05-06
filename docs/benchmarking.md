@@ -420,7 +420,7 @@ runner:
 
 ```bash
 gh workflow run nod-decoder-all.yml \
-  --repo FlorianPfaff/RepTrace \
+  --repo IPS-Stuttgart/RepTrace \
   --ref main \
   -f data_root=../data/nod \
   -f output_dir=results/nod_animate_decoders_all \
