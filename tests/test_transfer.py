@@ -75,7 +75,12 @@ def test_evaluate_feature_transfer_applies_pca_and_scores_accuracy():
         classifier="multiclass-svm",
         classifier_param=1.0,
         components_pca=1,
+        train_window=(0.1, 0.2),
+        n_permutations=2,
+        permutation_rng=np.random.default_rng(1),
     )
 
     assert result.accuracy == 1.0
     assert result.model_bundle.actual_components_pca == 1
+    assert result.model_bundle.train_window == (0.1, 0.2)
+    assert result.permutation_accuracy.shape == (2,)

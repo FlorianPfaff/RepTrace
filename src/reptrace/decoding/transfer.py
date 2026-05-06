@@ -21,7 +21,12 @@ from reptrace.decoding.windowed import (
     transform_window_features,
 )
 
-BINARY_ONE_VS_REST_CLASSIFIERS = ("gradient-boosting", "lasso", "svm-binary", "binary-svm")
+BINARY_ONE_VS_REST_CLASSIFIERS = (
+    "gradient-boosting",
+    "lasso",
+    "svm-binary",
+    "binary-svm",
+)
 
 
 @dataclass(frozen=True)
@@ -53,13 +58,17 @@ def append_null_class_features(
     """Append baseline/null feature rows with a constant null-class label."""
 
     stimulus_features = _feature_matrix(stimulus_features, name="stimulus_features")
-    labels = _label_vector(labels, expected_length=stimulus_features.shape[0], name="labels")
+    labels = _label_vector(
+        labels, expected_length=stimulus_features.shape[0], name="labels"
+    )
     if null_features is None:
         return stimulus_features, labels
 
     null_features = _feature_matrix(null_features, name="null_features")
     null_labels = np.full(null_features.shape[0], null_label, dtype=labels.dtype)
-    return np.vstack([stimulus_features, null_features]), np.concatenate([labels, null_labels])
+    return np.vstack([stimulus_features, null_features]), np.concatenate(
+        [labels, null_labels]
+    )
 
 
 def replace_null_class_predictions(
@@ -100,7 +109,9 @@ def cross_validate_feature_decoding(
     """Run contiguous-fold decoding on precomputed stimulus/null feature matrices."""
 
     stimulus_features = _feature_matrix(stimulus_features, name="stimulus_features")
-    labels = _label_vector(labels, expected_length=stimulus_features.shape[0], name="labels")
+    labels = _label_vector(
+        labels, expected_length=stimulus_features.shape[0], name="labels"
+    )
     n_trials = len(labels)
     fold_ids = sequential_fold_ids(n_trials, n_folds)
     features, augmented_labels = append_null_class_features(
@@ -113,7 +124,9 @@ def cross_validate_feature_decoding(
     if null_features is not None:
         null_features = _feature_matrix(null_features, name="null_features")
         if null_features.shape[0] != n_trials:
-            raise ValueError("null_features must contain one row per stimulus trial for fold augmentation.")
+            raise ValueError(
+                "null_features must contain one row per stimulus trial for fold augmentation."
+            )
         augmented_folds = np.concatenate([fold_ids, fold_ids])
 
     predictions = np.full(n_trials, np.nan)
@@ -140,7 +153,9 @@ def cross_validate_feature_decoding(
             model_bundle = fit_window_model(
                 train_features,
                 train_labels,
-                fit_model=_fit_model(classifier, classifier_param, random_state, fit_model),
+                fit_model=_fit_model(
+                    classifier, classifier_param, random_state, fit_model
+                ),
                 components_pca=components_pca,
             )
             fold_predictions, _ = predict_window_model(model_bundle, test_features)
@@ -148,7 +163,9 @@ def cross_validate_feature_decoding(
 
     predictions = replace_null_class_predictions(predictions, null_label=null_label)
     accuracy = float(np.mean(labels == predictions)) if len(labels) else np.nan
-    return CrossValidationResult(accuracy=accuracy, predictions=predictions, fold_ids=fold_ids)
+    return CrossValidationResult(
+        accuracy=accuracy, predictions=predictions, fold_ids=fold_ids
+    )
 
 
 def evaluate_feature_transfer(
@@ -164,6 +181,9 @@ def evaluate_feature_transfer(
     random_state: int | None = None,
     fit_model: Callable[[np.ndarray, np.ndarray], Any] | None = None,
     null_label: int | float = 0,
+    train_window: tuple[float, float] | None = None,
+    n_permutations: int = 0,
+    permutation_rng: np.random.Generator | None = None,
 ) -> WindowedDecodingResult:
     """Train on one feature matrix and score transfer to a validation matrix."""
 
@@ -180,10 +200,18 @@ def evaluate_feature_transfer(
         validation_labels,
         fit_model=_fit_model(classifier, classifier_param, random_state, fit_model),
         components_pca=components_pca,
+        train_window=train_window,
+        n_permutations=n_permutations,
+        permutation_rng=permutation_rng,
     )
 
 
-def _fit_model(classifier: str, classifier_param: Any, random_state: int | None, fit_model: Callable[[np.ndarray, np.ndarray], Any] | None):
+def _fit_model(
+    classifier: str,
+    classifier_param: Any,
+    random_state: int | None,
+    fit_model: Callable[[np.ndarray, np.ndarray], Any] | None,
+):
     if fit_model is not None:
         return fit_model
     return lambda features, labels: train_classifier(
@@ -222,7 +250,9 @@ def _one_vs_rest_predictions(
         )
         transformed_test = transform_window_features(binary_bundle, test_features)
         if classifier in ("lasso", "svm-binary", "binary-svm"):
-            all_scores[:, class_index] = positive_class_score(binary_bundle.model, transformed_test)
+            all_scores[:, class_index] = positive_class_score(
+                binary_bundle.model, transformed_test
+            )
         else:
             all_scores[:, class_index] = binary_bundle.model.predict(transformed_test)
     return class_labels[np.argmax(all_scores, axis=1)]
@@ -260,7 +290,9 @@ def _fit_binary_model(
     raise ValueError(f"Unsupported one-vs-rest classifier: {classifier}")
 
 
-def _feature_matrix(features: Sequence[Sequence[float]] | np.ndarray, *, name: str) -> np.ndarray:
+def _feature_matrix(
+    features: Sequence[Sequence[float]] | np.ndarray, *, name: str
+) -> np.ndarray:
     matrix = np.asarray(features, dtype=float)
     if matrix.ndim != 2:
         raise ValueError(f"{name} must be a two-dimensional feature matrix.")
@@ -269,8 +301,12 @@ def _feature_matrix(features: Sequence[Sequence[float]] | np.ndarray, *, name: s
     return matrix
 
 
-def _label_vector(labels: Sequence | np.ndarray, *, expected_length: int, name: str) -> np.ndarray:
+def _label_vector(
+    labels: Sequence | np.ndarray, *, expected_length: int, name: str
+) -> np.ndarray:
     vector = np.asarray(labels).ravel()
     if len(vector) != expected_length:
-        raise ValueError(f"{name} length must match feature rows: {len(vector)} != {expected_length}.")
+        raise ValueError(
+            f"{name} length must match feature rows: {len(vector)} != {expected_length}."
+        )
     return vector
