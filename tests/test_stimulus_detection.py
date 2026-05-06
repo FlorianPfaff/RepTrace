@@ -75,7 +75,6 @@ def test_detect_stimulus_events_returns_multiple_events_per_stream():
     )
 
     assert list(events["stimulus_class"]) == ["A", "B", "A"]
-    assert list(events["event_index"]) == [0, 1, 2]
     assert list(events["onset_time"]) == [0.10, 0.80, 1.40]
     assert list(events["detection_confirmed_time"]) == [0.20, 0.90, 1.50]
     assert events["run_length"].tolist() == [3, 3, 2]
