@@ -26,6 +26,7 @@ nav:
       - Semantic Stages: reference/semantic-stages.md
       - Temporal Generalization: reference/temporal-generalization.md
       - Temporal Model: reference/temporal-model.md
+      - Time-Resolved Decoding: reference/time-resolved-decoding.md
 
 theme:
   name: material
