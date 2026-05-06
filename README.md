@@ -95,8 +95,12 @@ python -m reptrace.onset_detection \
   --threshold-window -0.35 -0.05 \
   --threshold-quantile 0.95 \
   --out-events results/nod_sub-01_animate_onset_events.csv \
-  --out-summary results/nod_sub-01_animate_onset_summary.csv
+  --out-summary results/nod_sub-01_animate_onset_summary.csv \
+  --out-threshold-summary results/nod_sub-01_animate_threshold_summary.csv
 ```
+
+The threshold summary reports baseline false-positive rates separately from
+post-stimulus threshold-crossing rates.
 
 If the events CSV has the NOD `stim_is_animate` column but no named decoding
 condition yet, create one:
