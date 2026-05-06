@@ -5,6 +5,18 @@ from pathlib import Path
 
 import pandas as pd
 
+from reptrace.results.tables import peak_metric_rows, summarize_metric_table
+
+__all__ = [
+    "METRIC_COLUMNS",
+    "SUMMARY_GROUP_COLUMNS",
+    "aggregate_time_decode_csvs",
+    "aggregate_time_decode_results",
+    "peak_metric_rows",
+    "read_time_decode_results",
+    "summarize_metric_table",
+]
+
 METRIC_COLUMNS = ("accuracy", "log_loss", "brier", "ece")
 SUMMARY_GROUP_COLUMNS = ("decoder", "emission_mode")
 
@@ -52,11 +64,7 @@ def aggregate_time_decode_results(results: pd.DataFrame) -> pd.DataFrame:
     group_columns = [column for column in SUMMARY_GROUP_COLUMNS if column in results.columns]
     subject_time_keys = [*group_columns, "subject", "time"]
     aggregate_keys = [*group_columns, "time"]
-    subject_time = (
-        results.groupby(subject_time_keys, as_index=False)[list(METRIC_COLUMNS)]
-        .mean()
-        .sort_values(subject_time_keys)
-    )
+    subject_time = results.groupby(subject_time_keys, as_index=False)[list(METRIC_COLUMNS)].mean().sort_values(subject_time_keys)
     grouped = subject_time.groupby(aggregate_keys, as_index=False)
     aggregated = grouped[list(METRIC_COLUMNS)].mean()
     n_subjects = grouped["subject"].nunique().rename(columns={"subject": "n_subjects"})
@@ -85,9 +93,7 @@ def aggregate_time_decode_csvs(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Aggregate time-resolved decoding CSV files across folds and subjects."
-    )
+    parser = argparse.ArgumentParser(description="Aggregate time-resolved decoding CSV files across folds and subjects.")
     parser.add_argument("csv", nargs="+", type=Path)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--subject-column")

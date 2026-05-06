@@ -2,6 +2,19 @@ from __future__ import annotations
 
 import numpy as np
 
+from reptrace.metrics.confusion import confusion_counts, per_class_accuracy
+from reptrace.metrics.prepost import compare_prepost_windows, summarize_window_metric
+
+__all__ = [
+    "brier_score_multiclass",
+    "compare_prepost_windows",
+    "confusion_counts",
+    "expected_calibration_error",
+    "per_class_accuracy",
+    "reliability_bins",
+    "summarize_window_metric",
+]
+
 
 def expected_calibration_error(
     probabilities: np.ndarray,

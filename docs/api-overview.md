@@ -22,3 +22,8 @@ Key command-line modules include:
 - reptrace.emission_compare
 - reptrace.semantic_stages
 - reptrace.paper2_workflow
+
+Reusable table-oriented APIs include:
+
+- `reptrace.metrics` for calibration/probabilistic scoring metrics, pre/post window comparisons, and confusion-table summaries.
+- `reptrace.results` for time-decoding aggregation, participant/window result tables, and peak-window diagnostics.
