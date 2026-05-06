@@ -21,7 +21,7 @@ nav:
       - Onset Workflow: reference/onset-workflow.md
       - Onset Sensitivity: reference/onset-sensitivity.md
       - Paired Statistics: reference/paired-stats.md
-      - Paper 2 Workflow: reference/paper2-workflow.md
+      - Temporal State Workflow: reference/temporal-state-workflow.md
       - Results: reference/results.md
       - Semantic Stages: reference/semantic-stages.md
       - Temporal Generalization: reference/temporal-generalization.md

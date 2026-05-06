@@ -247,7 +247,7 @@ periods.
 
 This larger run is the minimum useful scale for subject-level statistical
 testing. The 5-subject pilot is useful for smoke testing and early signal
-checking; paper-facing claims should use the full staged manifest.
+checking; reported claims should use the full staged manifest.
 
 ## Second NOD-EEG Task
 
@@ -383,7 +383,7 @@ python -m reptrace.report \
 
 For decoder comparisons, the report includes both raw effect-window accuracy
 and effect minus baseline-window accuracy. The baseline-corrected value is the
-more relevant paper-facing number when a decoder shows pre-stimulus bias.
+more relevant reported number when a decoder shows pre-stimulus bias.
 
 Create a calibration-first decoder report and aggregate reliability bins:
 
@@ -436,7 +436,7 @@ CSVs already exist. Use an absolute `data_root` when the self-hosted runner
 keeps the NOD files outside the repository workspace.
 
 After downloading or locating the workflow output directory, export only
-paper-safe artifacts into the paper repository:
+paper-safe artifacts into the compact export directory:
 
 ```bash
 python scripts/export_paper_results.py \
@@ -492,34 +492,34 @@ python -m reptrace.semantic_stages \
   --out-report results/nod_animate_all/semantic_stages.md
 ```
 
-## Paper 2 Temporal-State Workflow
+## Calibration-Aware Temporal-State Workflow
 
-Use `reptrace.paper2_workflow` to run the calibration-aware temporal-state pass
+Use `reptrace.temporal_state_workflow` to run the calibration-aware temporal-state pass
 across the three staged NOD tasks: animate/inanimate, canine/device, and
 container/covering. The workflow prepares runner-local manifests, validates all
 19 NOD-EEG subjects, runs matched calibrated and uncalibrated emissions in the
 same folds, fits sticky temporal models, compares controls, summarizes semantic
-stages, and writes compact artifacts for the paper repository.
+stages, and writes compact artifacts for the compact export directory.
 
 ```bash
-python -m reptrace.paper2_workflow \
+python -m reptrace.temporal_state_workflow \
   --data-root data/nod \
-  --out-dir results/paper2_temporal_state_inference \
-  --paper-export-dir ../2026-05-RepTrace-Paper/results/paper2_temporal_state_inference \
+  --out-dir results/temporal_state_inference \
+  --compact-export-dir ../RepTrace-Compact-Results/results/temporal_state_inference \
   --decoders logistic linear_svm \
   --n-permutations 100
 ```
 
-The top-level outputs are `paper2_summary.csv`, `paper2_stage_reliability.png`,
-`paper2_evidence.md`, and `paper2_commands.md`. The paper export intentionally
+The top-level outputs are `temporal_state_summary.csv`, `temporal_state_reliability.png`,
+`temporal_state_evidence.md`, and `temporal_state_commands.md`. The compact export intentionally
 excludes large probability observation and state-trace CSVs.
 
 For a smoke test, run one task and one subject with fewer permutations:
 
 ```bash
-python -m reptrace.paper2_workflow \
+python -m reptrace.temporal_state_workflow \
   --data-root data/nod \
-  --out-dir results/paper2_smoke \
+  --out-dir results/temporal_state_smoke \
   --task nod_animate \
   --decoders linear_svm \
   --max-subjects 1 \
