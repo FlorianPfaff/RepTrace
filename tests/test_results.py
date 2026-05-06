@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from reptrace.results import aggregate_time_decode_csvs, aggregate_time_decode_results
+from reptrace.results import aggregate_time_decode_csvs, aggregate_time_decode_results, peak_metric_rows, summarize_metric_table
 
 
 def _result_frame(subject: str, offset: float = 0.0) -> pd.DataFrame:
@@ -65,3 +65,43 @@ def test_aggregate_time_decode_results_keeps_emission_modes_separate():
 
     assert aggregated["emission_mode"].tolist() == ["calibrated", "calibrated", "uncalibrated", "uncalibrated"]
     assert aggregated["accuracy_mean"].round(3).tolist() == [0.7, 0.8, 0.8, 0.9]
+
+
+def test_summarize_metric_table_reports_participants_chance_and_scaled_values():
+    frame = pd.DataFrame(
+        {
+            "decoder": ["logistic", "logistic", "logistic", "svm"],
+            "window": [0.1, 0.1, 0.1, 0.1],
+            "participant": ["s1", "s2", "s2", "s1"],
+            "accuracy": [0.6, 0.8, 0.7, 0.55],
+            "chance": [0.5, 0.5, 0.5, 0.5],
+        }
+    )
+
+    summary = summarize_metric_table(frame, "accuracy", ("decoder", "window"), participant_column="participant", chance_column="chance", scale=100.0)
+
+    logistic = summary.loc[summary["decoder"] == "logistic"].iloc[0]
+    assert logistic["n_rows"] == 3
+    assert logistic["n_participants"] == 2
+    assert round(float(logistic["accuracy_mean"]), 3) == 70.0
+    assert logistic["chance_mean"] == 50.0
+    assert logistic["accuracy_above_chance_count"] == 3
+    assert round(float(logistic["accuracy_minus_chance_mean"]), 3) == 20.0
+
+
+def test_peak_metric_rows_breaks_ties_toward_preferred_time():
+    frame = pd.DataFrame(
+        {
+            "decoder": ["logistic", "logistic", "logistic", "svm"],
+            "participant": ["s1", "s1", "s1", "s1"],
+            "time": [-0.1, 0.1, 0.3, 0.2],
+            "accuracy": [0.8, 0.8, 0.7, 0.9],
+        }
+    )
+
+    peaks = peak_metric_rows(frame, "accuracy", ("decoder", "participant"), prefer_time=0.0)
+
+    logistic = peaks.loc[peaks["decoder"] == "logistic"].iloc[0]
+    assert logistic["time"] == -0.1
+    assert logistic["accuracy"] == 0.8
+    assert round(float(logistic["peak_distance_to_prefer_time"]), 3) == 0.1
