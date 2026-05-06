@@ -7,6 +7,8 @@ from typing import Any
 import numpy as np
 from sklearn.decomposition import PCA
 
+from reptrace.decoding.classifiers import prediction_scores
+
 
 @dataclass(frozen=True)
 class WindowedModelBundle:
@@ -197,21 +199,6 @@ def permutation_p_from_accuracy(accuracy: float, permutation_accuracy: Sequence[
     if permutation_accuracy.size == 0 or not np.isfinite(accuracy):
         return np.nan
     return float((np.sum(permutation_accuracy >= accuracy) + 1.0) / (permutation_accuracy.size + 1.0))
-
-
-def prediction_scores(model: Any, features: Sequence[Sequence[float]] | np.ndarray) -> np.ndarray:
-    """Return one confidence-like score per row from common classifier APIs."""
-
-    features = _feature_matrix(features, name="features")
-    if hasattr(model, "decision_function"):
-        scores = np.asarray(model.decision_function(features), dtype=float)
-        if scores.ndim == 1:
-            return np.abs(scores)
-        return np.max(scores, axis=1)
-    if hasattr(model, "predict_proba"):
-        scores = np.asarray(model.predict_proba(features), dtype=float)
-        return np.max(scores, axis=1)
-    return np.full(features.shape[0], np.nan, dtype=float)
 
 
 def _fit_pca_transform(
