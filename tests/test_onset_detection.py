@@ -3,7 +3,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from reptrace.onset_detection import annotate_threshold_crossings, detect_onsets, detect_onsets_from_csvs, summarize_onset_events, summarize_threshold_crossings
+from reptrace.onset_detection import (
+    annotate_threshold_crossings,
+    detect_onsets,
+    detect_onsets_from_csvs,
+    summarize_onset_events,
+    summarize_threshold_crossings,
+)
 
 
 def _observation_frame() -> pd.DataFrame:
@@ -81,6 +87,58 @@ def test_detection_start_excludes_baseline_false_alarms():
     assert row["detected"]
     assert not row["detected_before_zero"]
     assert row["detection_time"] == 0.05
+
+
+def test_detection_window_limits_candidate_events():
+    events = detect_onsets(
+        _observation_frame(),
+        threshold_window=(-0.20, -0.10),
+        threshold_quantile=0.875,
+        detection_window=(0.14, 0.16),
+    )
+
+    detected = events.loc[events["detected"]]
+
+    assert not detected.empty
+    assert detected["detection_time"].between(0.14, 0.16).all()
+    assert events["detection_scan_start"].dropna().eq(0.14).all()
+    assert events["detection_scan_stop"].dropna().eq(0.16).all()
+
+
+def test_max_run_threshold_uses_sequence_level_baseline_maxima():
+    rows = []
+    for sequence_id, peak in enumerate([0.90, 0.91, 0.92]):
+        for time, confidence in [(-0.30, 0.50), (-0.20, 0.52), (-0.10, peak), (0.10, 0.93)]:
+            rows.append(
+                {
+                    "subject": "sub-01",
+                    "decoder": "logistic",
+                    "emission_mode": "calibrated",
+                    "time": time,
+                    "sequence_id": sequence_id,
+                    "confidence": confidence,
+                    "prob_class_0": confidence,
+                    "prob_class_1": 1.0 - confidence,
+                }
+            )
+    frame = pd.DataFrame(rows)
+
+    point = annotate_threshold_crossings(
+        frame,
+        threshold_window=(-0.30, -0.10),
+        threshold_quantile=0.80,
+        threshold_method="point",
+    )
+    max_run = annotate_threshold_crossings(
+        frame,
+        threshold_window=(-0.30, -0.10),
+        threshold_quantile=0.80,
+        threshold_method="max_run",
+    )
+
+    assert max_run["score_threshold"].iloc[0] > point["score_threshold"].iloc[0]
+    assert max_run["threshold_method"].nunique() == 1
+    assert max_run["threshold_method"].iloc[0] == "max_run"
 
 
 def test_min_consecutive_requires_sustained_threshold_crossing():
@@ -204,6 +262,7 @@ def test_detect_onsets_from_csvs_writes_outputs(tmp_path: Path):
         [observations_path],
         threshold_window=(-0.20, -0.10),
         threshold_quantile=0.875,
+        event_window=(0.0, float("inf")),
         min_consecutive=2,
         out_events=events_path,
         out_summary=summary_path,
@@ -223,3 +282,5 @@ def test_detect_onsets_from_csvs_writes_outputs(tmp_path: Path):
     assert threshold_summary["baseline_false_positive_count"].iloc[0] == 1
     assert written["min_consecutive"].nunique() == 1
     assert written["min_consecutive"].iloc[0] == 2
+    assert written["threshold_method"].nunique() == 1
+    assert written["threshold_method"].iloc[0] == "point"

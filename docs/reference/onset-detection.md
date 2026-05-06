@@ -2,7 +2,7 @@
 
 `reptrace.onset_detection` detects the first threshold-crossing time in held-out probability-observation traces.
 
-The basic detector estimates a score threshold from a baseline window, then reports the first time each trial/sequence crosses that threshold. The module also supports sustained-onset criteria to reduce one-bin false detections.
+The basic detector estimates a score threshold from a baseline window, then reports the first time each trial/sequence crosses that threshold. The module also supports sustained-onset criteria and a sequence-level max-run threshold to reduce false detections from scanning many time bins.
 
 ## Sustained-onset controls
 
@@ -13,6 +13,7 @@ python -m reptrace.onset_detection \
   results/nod_sub-01_animate_observations.csv \
   --threshold-window -0.10 0.00 \
   --threshold-quantile 0.95 \
+  --threshold-method max_run \
   --detection-start 0.00 \
   --min-consecutive 3 \
   --require-stable-prediction \
@@ -23,6 +24,7 @@ python -m reptrace.onset_detection \
 - `--min-consecutive` requires at least this many adjacent above-threshold windows.
 - `--min-duration` requires the above-threshold run to last at least the given duration in seconds.
 - `--require-stable-prediction` breaks an onset run when the predicted class changes across adjacent above-threshold bins.
+- `--threshold-method max_run` estimates the threshold from sequence-level baseline maxima under the same run criteria, rather than from pointwise baseline scores.
 
 The event CSV includes the run length, run duration, run stop time, and peak score within the detection run. The summary CSV reports detection rates, false-alarm rates, post-zero detection rates, correct-at-detection rates, and median post-zero detection latencies.
 

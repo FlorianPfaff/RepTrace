@@ -11,6 +11,7 @@ python -m reptrace.onset_workflow \
   --task-dir results/nod_superclass_container_covering_all \
   --threshold-window -0.100 0.000 \
   --threshold-quantile 0.95 \
+  --threshold-method max_run \
   --detection-start 0.000 \
   --min-consecutive 3 \
   --require-stable-prediction \

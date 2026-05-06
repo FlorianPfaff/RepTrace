@@ -10,6 +10,7 @@ python -m reptrace.onset_sensitivity \
   --task-dir results/nod_superclass_canine_device_all \
   --task-dir results/nod_superclass_container_covering_all \
   --threshold-window -0.100 0.000 \
+  --threshold-methods point max_run \
   --threshold-quantiles 0.90 0.95 0.975 \
   --detection-start 0.000 \
   --min-consecutive-values 1 2 3 \
@@ -18,6 +19,6 @@ python -m reptrace.onset_sensitivity \
   --plot-out results/onset_sensitivity_all/onset_sensitivity.png
 ```
 
-The workflow writes `onset_sensitivity_summary.csv` with one row per setting and task summary, plus `onset_sensitivity_robustness.csv` with latency spread and detection-quality aggregates across settings.
+The workflow writes `onset_sensitivity_summary.csv` with one row per threshold method, threshold quantile, persistence setting, and task summary, plus `onset_sensitivity_robustness.csv` with latency spread and detection-quality aggregates across settings.
 
 ::: reptrace.onset_sensitivity

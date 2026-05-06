@@ -12,6 +12,7 @@ from reptrace.temporal_model import probability_columns, read_probability_observ
 DEFAULT_THRESHOLD_WINDOW = (-0.35, -0.05)
 DEFAULT_DETECTION_WINDOW = (0.0, float("inf"))
 DEFAULT_THRESHOLD_QUANTILE = 0.95
+THRESHOLD_METHODS = ("point", "max_run")
 GROUP_COLUMNS = ("subject", "decoder", "emission_mode")
 
 
@@ -61,11 +62,19 @@ def _score_values(frame: pd.DataFrame, score_column: str) -> pd.Series:
     raise ValueError(f"Score column '{score_column}' is missing and cannot be inferred.")
 
 
-def _class_name_for_row(row: pd.Series, class_index: int) -> str:
-    class_column = f"class_{class_index}"
-    if class_column in row and pd.notna(row[class_column]):
-        return str(row[class_column])
-    return str(class_index)
+def _class_lookup(frame: pd.DataFrame) -> dict[int, str]:
+    lookup: dict[int, str] = {}
+    for column in frame.columns:
+        if not column.startswith("class_"):
+            continue
+        try:
+            class_index = int(column.removeprefix("class_"))
+        except ValueError:
+            continue
+        values = frame[column].dropna()
+        if not values.empty:
+            lookup[class_index] = str(values.iloc[0])
+    return lookup
 
 
 def _ensure_prediction_columns(frame: pd.DataFrame) -> pd.DataFrame:
@@ -75,13 +84,15 @@ def _ensure_prediction_columns(frame: pd.DataFrame) -> pd.DataFrame:
     prob_columns = probability_columns(frame)
     probabilities = frame[prob_columns].to_numpy(dtype=float)
     predicted_labels = probabilities.argmax(axis=1)
+    if "predicted_label" in frame.columns:
+        parsed_labels = pd.to_numeric(frame["predicted_label"], errors="coerce")
+        if parsed_labels.notna().all():
+            predicted_labels = parsed_labels.astype(int).to_numpy()
     if "predicted_label" not in frame.columns:
         frame["predicted_label"] = predicted_labels
     if "predicted_class" not in frame.columns:
-        frame["predicted_class"] = [
-            _class_name_for_row(row, int(label))
-            for label, (_, row) in zip(predicted_labels, frame.iterrows(), strict=True)
-        ]
+        lookup = _class_lookup(frame)
+        frame["predicted_class"] = [lookup.get(int(label), str(int(label))) for label in predicted_labels]
     return frame
 
 
@@ -91,13 +102,105 @@ def _threshold_for_group(
     threshold_window: tuple[float, float],
     threshold_quantile: float,
     score_column: str,
+    threshold_method: str = "point",
+    min_consecutive: int = 1,
+    min_duration: float | None = None,
+    require_stable_prediction: bool = False,
 ) -> float:
+    if threshold_method not in THRESHOLD_METHODS:
+        raise ValueError(f"threshold_method must be one of {THRESHOLD_METHODS}.")
     start, stop = threshold_window
     baseline = frame.loc[(frame["time"] >= start) & (frame["time"] <= stop)]
-    scores = _score_values(baseline, score_column).dropna()
+    if threshold_method == "max_run":
+        sequence_columns = _sequence_columns(frame)
+        scores = _baseline_run_null_scores(
+            baseline,
+            sequence_columns=sequence_columns,
+            score_column=score_column,
+            min_consecutive=min_consecutive,
+            min_duration=min_duration,
+            require_stable_prediction=require_stable_prediction,
+        ).dropna()
+    else:
+        scores = _score_values(baseline, score_column).dropna()
     if scores.empty:
         return np.nan
     return float(scores.quantile(threshold_quantile))
+
+
+def _segment_run_score(segment: pd.DataFrame) -> float:
+    scores = pd.to_numeric(segment["_onset_score"], errors="coerce").dropna()
+    if scores.empty:
+        return np.nan
+    return float(scores.min())
+
+
+def _valid_run_score_candidates(
+    sequence_frame: pd.DataFrame,
+    *,
+    min_consecutive: int,
+    min_duration: float | None,
+    require_stable_prediction: bool,
+) -> list[float]:
+    if min_consecutive < 1:
+        raise ValueError("min_consecutive must be at least 1.")
+    if min_duration is not None and min_duration < 0:
+        raise ValueError("min_duration must be non-negative when provided.")
+
+    sequence_frame = sequence_frame.sort_values("time").reset_index(drop=True)
+    scores: list[float] = []
+    for start in range(len(sequence_frame)):
+        previous_prediction = None
+        for stop in range(start, len(sequence_frame)):
+            segment = sequence_frame.iloc[start : stop + 1]
+            prediction = _prediction_value(segment.iloc[-1])
+            if (
+                require_stable_prediction
+                and previous_prediction is not None
+                and prediction != previous_prediction
+            ):
+                break
+            previous_prediction = prediction
+            if len(segment) < min_consecutive:
+                continue
+            if min_duration is not None and _run_duration(segment) < min_duration:
+                continue
+            scores.append(_segment_run_score(segment))
+    return [score for score in scores if np.isfinite(score)]
+
+
+def _baseline_run_null_scores(
+    baseline: pd.DataFrame,
+    *,
+    sequence_columns: list[str],
+    score_column: str,
+    min_consecutive: int,
+    min_duration: float | None,
+    require_stable_prediction: bool,
+) -> pd.Series:
+    """Return one max-run null score per baseline sequence.
+
+    Each score is the largest threshold that would still produce a valid
+    baseline detection run under the same persistence constraints used for the
+    event detector. Quantiling these sequence-level maxima corrects for scanning
+    multiple time bins more directly than a pointwise score quantile.
+    """
+
+    if baseline.empty:
+        return pd.Series(dtype=float)
+    scored = baseline.copy()
+    scored["_onset_score"] = _score_values(scored, score_column)
+    rows = []
+    for _, sequence_frame in scored.groupby(sequence_columns, sort=True):
+        candidates = _valid_run_score_candidates(
+            sequence_frame,
+            min_consecutive=min_consecutive,
+            min_duration=min_duration,
+            require_stable_prediction=require_stable_prediction,
+        )
+        if candidates:
+            rows.append(max(candidates))
+    return pd.Series(rows, dtype=float)
 
 
 def _sequence_identity(row: pd.Series) -> dict:
@@ -215,10 +318,12 @@ def _event_row(
     detection_run: pd.DataFrame | None,
     *,
     threshold: float,
+    threshold_method: str,
     threshold_window: tuple[float, float],
     threshold_quantile: float,
     score_column: str,
     detection_start: float | None,
+    detection_window: tuple[float, float] | None,
     min_consecutive: int,
     min_duration: float | None,
     require_stable_prediction: bool,
@@ -237,10 +342,13 @@ def _event_row(
         "detected_before_zero": bool(detected and detection_time < 0.0),
         "score_threshold": threshold,
         "score_column": score_column,
+        "threshold_method": threshold_method,
         "threshold_quantile": threshold_quantile,
         "threshold_window_start": threshold_window[0],
         "threshold_window_stop": threshold_window[1],
         "detection_start": detection_start if detection_start is not None else np.nan,
+        "detection_scan_start": detection_window[0] if detection_window is not None else np.nan,
+        "detection_scan_stop": detection_window[1] if detection_window is not None else np.nan,
         "min_consecutive": min_consecutive,
         "min_duration": min_duration if min_duration is not None else np.nan,
         "require_stable_prediction": require_stable_prediction,
@@ -300,6 +408,10 @@ def _annotate_group_threshold(
     threshold_window: tuple[float, float],
     threshold_quantile: float,
     score_column: str,
+    threshold_method: str,
+    min_consecutive: int,
+    min_duration: float | None,
+    require_stable_prediction: bool,
 ) -> pd.DataFrame:
     frame = frame.copy()
     frame["_onset_score"] = _score_values(frame, score_column)
@@ -308,11 +420,16 @@ def _annotate_group_threshold(
         threshold_window=threshold_window,
         threshold_quantile=threshold_quantile,
         score_column=score_column,
+        threshold_method=threshold_method,
+        min_consecutive=min_consecutive,
+        min_duration=min_duration,
+        require_stable_prediction=require_stable_prediction,
     )
     frame["onset_score"] = frame["_onset_score"]
     frame["score_threshold"] = threshold
     frame["above_threshold"] = np.isfinite(threshold) & (frame["_onset_score"] >= threshold)
     frame["score_column"] = score_column
+    frame["threshold_method"] = threshold_method
     frame["threshold_quantile"] = threshold_quantile
     frame["threshold_window_start"] = threshold_window[0]
     frame["threshold_window_stop"] = threshold_window[1]
@@ -327,11 +444,17 @@ def annotate_threshold_crossings(
     threshold_window: tuple[float, float] = DEFAULT_THRESHOLD_WINDOW,
     threshold_quantile: float = DEFAULT_THRESHOLD_QUANTILE,
     score_column: str = "confidence",
+    threshold_method: str = "point",
+    min_consecutive: int = 1,
+    min_duration: float | None = None,
+    require_stable_prediction: bool = False,
 ) -> pd.DataFrame:
     """Annotate observation rows with baseline-derived threshold crossings."""
 
     if not 0.0 <= threshold_quantile <= 1.0:
         raise ValueError("threshold_quantile must be between 0 and 1.")
+    if threshold_method not in THRESHOLD_METHODS:
+        raise ValueError(f"threshold_method must be one of {THRESHOLD_METHODS}.")
     if "time" not in observations.columns:
         raise ValueError("Observation rows must contain a time column.")
 
@@ -346,9 +469,75 @@ def annotate_threshold_crossings(
                 threshold_window=threshold_window,
                 threshold_quantile=threshold_quantile,
                 score_column=score_column,
+                threshold_method=threshold_method,
+                min_consecutive=min_consecutive,
+                min_duration=min_duration,
+                require_stable_prediction=require_stable_prediction,
             )
         )
     return pd.concat(frames, ignore_index=True) if frames else observations.copy()
+
+
+def _has_matching_threshold_annotation(
+    observations: pd.DataFrame,
+    *,
+    threshold_method: str,
+    threshold_quantile: float,
+    score_column: str,
+) -> bool:
+    if "score_threshold" not in observations.columns:
+        return False
+    if "_onset_score" not in observations.columns and "onset_score" not in observations.columns:
+        return False
+    checks = {
+        "threshold_method": threshold_method,
+        "score_column": score_column,
+    }
+    for column, expected in checks.items():
+        if column in observations.columns and not observations[column].dropna().astype(str).eq(str(expected)).all():
+            return False
+    if "threshold_quantile" in observations.columns:
+        quantiles = pd.to_numeric(observations["threshold_quantile"], errors="coerce").dropna()
+        if not quantiles.empty and not np.allclose(quantiles.to_numpy(dtype=float), threshold_quantile):
+            return False
+    return True
+
+
+def _prepare_thresholded_observations(
+    observations: pd.DataFrame,
+    *,
+    threshold_window: tuple[float, float],
+    threshold_quantile: float,
+    score_column: str,
+    threshold_method: str,
+    min_consecutive: int,
+    min_duration: float | None,
+    require_stable_prediction: bool,
+) -> pd.DataFrame:
+    if _has_matching_threshold_annotation(
+        observations,
+        threshold_method=threshold_method,
+        threshold_quantile=threshold_quantile,
+        score_column=score_column,
+    ):
+        thresholded = _ensure_prediction_columns(observations).copy()
+        if "_onset_score" not in thresholded.columns:
+            thresholded["_onset_score"] = pd.to_numeric(thresholded["onset_score"], errors="coerce")
+        thresholded["above_threshold"] = thresholded["_onset_score"] >= pd.to_numeric(
+            thresholded["score_threshold"],
+            errors="coerce",
+        )
+        return thresholded
+    return annotate_threshold_crossings(
+        observations,
+        threshold_window=threshold_window,
+        threshold_quantile=threshold_quantile,
+        score_column=score_column,
+        threshold_method=threshold_method,
+        min_consecutive=min_consecutive,
+        min_duration=min_duration,
+        require_stable_prediction=require_stable_prediction,
+    )
 
 
 def _sequence_crossing_rate(frame: pd.DataFrame, sequence_columns: list[str]) -> tuple[int, float]:
@@ -402,6 +591,7 @@ def summarize_threshold_crossings(
                 **group_values,
                 "score_threshold": group_frame["score_threshold"].iloc[0] if "score_threshold" in group_frame else np.nan,
                 "score_column": group_frame["score_column"].iloc[0] if "score_column" in group_frame else "",
+                "threshold_method": group_frame["threshold_method"].iloc[0] if "threshold_method" in group_frame else "",
                 "threshold_quantile": group_frame["threshold_quantile"].iloc[0] if "threshold_quantile" in group_frame else np.nan,
                 "baseline_window_start": baseline_window[0],
                 "baseline_window_stop": baseline_window[1],
@@ -431,7 +621,9 @@ def detect_onsets(
     threshold_window: tuple[float, float] = DEFAULT_THRESHOLD_WINDOW,
     threshold_quantile: float = DEFAULT_THRESHOLD_QUANTILE,
     score_column: str = "confidence",
+    threshold_method: str = "point",
     detection_start: float | None = None,
+    detection_window: tuple[float, float] | None = None,
     min_consecutive: int = 1,
     min_duration: float | None = None,
     require_stable_prediction: bool = False,
@@ -446,6 +638,8 @@ def detect_onsets(
 
     if not 0.0 <= threshold_quantile <= 1.0:
         raise ValueError("threshold_quantile must be between 0 and 1.")
+    if threshold_method not in THRESHOLD_METHODS:
+        raise ValueError(f"threshold_method must be one of {THRESHOLD_METHODS}.")
     if min_consecutive < 1:
         raise ValueError("min_consecutive must be at least 1.")
     if min_duration is not None and min_duration < 0:
@@ -453,11 +647,15 @@ def detect_onsets(
     if "time" not in observations.columns:
         raise ValueError("Observation rows must contain a time column.")
 
-    observations = annotate_threshold_crossings(
+    observations = _prepare_thresholded_observations(
         observations,
         threshold_window=threshold_window,
         threshold_quantile=threshold_quantile,
         score_column=score_column,
+        threshold_method=threshold_method,
+        min_consecutive=min_consecutive,
+        min_duration=min_duration,
+        require_stable_prediction=require_stable_prediction,
     )
     group_columns = _group_columns(observations)
     sequence_columns = _sequence_columns(observations)
@@ -475,6 +673,10 @@ def detect_onsets(
                 threshold_window=threshold_window,
                 threshold_quantile=threshold_quantile,
                 score_column=score_column,
+                threshold_method=threshold_method,
+                min_consecutive=min_consecutive,
+                min_duration=min_duration,
+                require_stable_prediction=require_stable_prediction,
             )
         )
         sorted_group = group_frame.sort_values([*sequence_columns, "time"])
@@ -482,6 +684,9 @@ def detect_onsets(
             candidates = sequence_frame
             if detection_start is not None:
                 candidates = candidates.loc[candidates["time"] >= detection_start]
+            if detection_window is not None:
+                start, stop = detection_window
+                candidates = candidates.loc[(candidates["time"] >= start) & (candidates["time"] <= stop)]
             detection_run = _first_detection_run(
                 candidates,
                 threshold=threshold,
@@ -495,10 +700,12 @@ def detect_onsets(
                     sequence_frame,
                     detection_run,
                     threshold=threshold,
+                    threshold_method=threshold_method,
                     threshold_window=threshold_window,
                     threshold_quantile=threshold_quantile,
                     score_column=score_column,
                     detection_start=detection_start,
+                    detection_window=detection_window,
                     min_consecutive=min_consecutive,
                     min_duration=min_duration,
                     require_stable_prediction=require_stable_prediction,
@@ -555,6 +762,11 @@ def summarize_onset_events(events: pd.DataFrame) -> pd.DataFrame:
                     if "score_threshold" in group_frame
                     else np.nan
                 ),
+                "threshold_method": (
+                    group_frame["threshold_method"].iloc[0]
+                    if "threshold_method" in group_frame
+                    else ""
+                ),
                 "threshold_quantile": (
                     group_frame["threshold_quantile"].iloc[0]
                     if "threshold_quantile" in group_frame
@@ -587,7 +799,9 @@ def detect_onsets_from_csvs(
     threshold_window: tuple[float, float] = DEFAULT_THRESHOLD_WINDOW,
     threshold_quantile: float = DEFAULT_THRESHOLD_QUANTILE,
     score_column: str = "confidence",
+    threshold_method: str = "point",
     detection_start: float | None = None,
+    event_window: tuple[float, float] | None = None,
     min_consecutive: int = 1,
     min_duration: float | None = None,
     require_stable_prediction: bool = False,
@@ -605,13 +819,19 @@ def detect_onsets_from_csvs(
         threshold_window=threshold_window,
         threshold_quantile=threshold_quantile,
         score_column=score_column,
+        threshold_method=threshold_method,
+        min_consecutive=min_consecutive,
+        min_duration=min_duration,
+        require_stable_prediction=require_stable_prediction,
     )
     events = detect_onsets(
         thresholded_observations,
         threshold_window=threshold_window,
         threshold_quantile=threshold_quantile,
         score_column=score_column,
+        threshold_method=threshold_method,
         detection_start=detection_start,
+        detection_window=event_window,
         min_consecutive=min_consecutive,
         min_duration=min_duration,
         require_stable_prediction=require_stable_prediction,
@@ -656,8 +876,10 @@ def main() -> None:
         metavar=("START", "STOP"),
     )
     parser.add_argument("--threshold-quantile", type=float, default=DEFAULT_THRESHOLD_QUANTILE)
+    parser.add_argument("--threshold-method", choices=THRESHOLD_METHODS, default="point")
     parser.add_argument("--score-column", default="confidence")
     parser.add_argument("--detection-start", type=float)
+    parser.add_argument("--event-window", nargs=2, type=float, metavar=("START", "STOP"))
     parser.add_argument("--detection-window", nargs=2, type=float, default=DEFAULT_DETECTION_WINDOW, metavar=("START", "STOP"))
     parser.add_argument("--out-thresholded-observations", type=Path)
     parser.add_argument("--out-threshold-summary", type=Path)
@@ -684,7 +906,9 @@ def main() -> None:
         threshold_window=tuple(args.threshold_window),
         threshold_quantile=args.threshold_quantile,
         score_column=args.score_column,
+        threshold_method=args.threshold_method,
         detection_start=args.detection_start,
+        event_window=tuple(args.event_window) if args.event_window is not None else None,
         detection_window=tuple(args.detection_window),
         min_consecutive=args.min_consecutive,
         min_duration=args.min_duration,

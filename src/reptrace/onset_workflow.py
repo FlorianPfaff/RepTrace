@@ -15,6 +15,7 @@ import pandas as pd
 from reptrace.onset_detection import (
     DEFAULT_THRESHOLD_QUANTILE,
     DEFAULT_THRESHOLD_WINDOW,
+    THRESHOLD_METHODS,
     detect_onsets_from_csvs,
 )
 
@@ -79,8 +80,10 @@ def run_task_onset_detection(
     observations_glob: str = DEFAULT_OBSERVATIONS_GLOB,
     threshold_window: tuple[float, float] = DEFAULT_THRESHOLD_WINDOW,
     threshold_quantile: float = DEFAULT_THRESHOLD_QUANTILE,
+    threshold_method: str = "point",
     score_column: str = "confidence",
     detection_start: float | None = None,
+    event_window: tuple[float, float] | None = None,
     min_consecutive: int = 1,
     min_duration: float | None = None,
     require_stable_prediction: bool = False,
@@ -102,8 +105,10 @@ def run_task_onset_detection(
         observation_csvs,
         threshold_window=threshold_window,
         threshold_quantile=threshold_quantile,
+        threshold_method=threshold_method,
         score_column=score_column,
         detection_start=detection_start,
+        event_window=event_window,
         min_consecutive=min_consecutive,
         min_duration=min_duration,
         require_stable_prediction=require_stable_prediction,
@@ -195,8 +200,10 @@ def run_onset_workflow(
     observations_glob: str = DEFAULT_OBSERVATIONS_GLOB,
     threshold_window: tuple[float, float] = DEFAULT_THRESHOLD_WINDOW,
     threshold_quantile: float = DEFAULT_THRESHOLD_QUANTILE,
+    threshold_method: str = "point",
     score_column: str = "confidence",
     detection_start: float | None = None,
+    event_window: tuple[float, float] | None = None,
     min_consecutive: int = 1,
     min_duration: float | None = None,
     require_stable_prediction: bool = False,
@@ -223,8 +230,10 @@ def run_onset_workflow(
                 observations_glob=observations_glob,
                 threshold_window=threshold_window,
                 threshold_quantile=threshold_quantile,
+                threshold_method=threshold_method,
                 score_column=score_column,
                 detection_start=detection_start,
+                event_window=event_window,
                 min_consecutive=min_consecutive,
                 min_duration=min_duration,
                 require_stable_prediction=require_stable_prediction,
@@ -285,8 +294,10 @@ def main() -> None:
         metavar=("START", "STOP"),
     )
     parser.add_argument("--threshold-quantile", type=float, default=DEFAULT_THRESHOLD_QUANTILE)
+    parser.add_argument("--threshold-method", choices=THRESHOLD_METHODS, default="point")
     parser.add_argument("--score-column", default="confidence")
     parser.add_argument("--detection-start", type=float)
+    parser.add_argument("--event-window", nargs=2, type=float, metavar=("START", "STOP"))
     parser.add_argument("--min-consecutive", type=int, default=1)
     parser.add_argument("--min-duration", type=float)
     parser.add_argument("--require-stable-prediction", action="store_true")
@@ -301,8 +312,10 @@ def main() -> None:
         observations_glob=args.observations_glob,
         threshold_window=tuple(args.threshold_window),
         threshold_quantile=args.threshold_quantile,
+        threshold_method=args.threshold_method,
         score_column=args.score_column,
         detection_start=args.detection_start,
+        event_window=tuple(args.event_window) if args.event_window is not None else None,
         min_consecutive=args.min_consecutive,
         min_duration=args.min_duration,
         require_stable_prediction=args.require_stable_prediction,

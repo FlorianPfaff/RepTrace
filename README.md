@@ -25,7 +25,7 @@ RepTrace currently provides tools for:
   analyses;
 - calibrated classification metrics, including Brier score and expected
   calibration error;
-- calibration-first reports and reliability-bin diagnostics;
+- calibration-aware reports and reliability-bin diagnostics;
 - standard decoder baselines, including logistic regression, LDA, and
   calibrated linear SVM;
 - grouped cross-validation for session- or run-aware benchmarks; and
@@ -94,6 +94,9 @@ python -m reptrace.onset_detection \
   results/nod_sub-01_animate_observations.csv \
   --threshold-window -0.35 -0.05 \
   --threshold-quantile 0.95 \
+  --threshold-method max_run \
+  --min-consecutive 2 \
+  --require-stable-prediction \
   --out-events results/nod_sub-01_animate_onset_events.csv \
   --out-summary results/nod_sub-01_animate_onset_summary.csv \
   --out-threshold-summary results/nod_sub-01_animate_threshold_summary.csv
