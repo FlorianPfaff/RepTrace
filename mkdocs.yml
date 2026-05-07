@@ -20,6 +20,7 @@ nav:
       - Metrics: reference/metrics.md
       - Onset Detection: reference/onset-detection.md
       - Onset Validation: reference/onset-validation.md
+      - Stimulus Detection: reference/stimulus-detection.md
       - Onset Workflow: reference/onset-workflow.md
       - Onset Sensitivity: reference/onset-sensitivity.md
       - Paired Statistics: reference/paired-stats.md
