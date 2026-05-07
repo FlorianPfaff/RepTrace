@@ -19,6 +19,8 @@ RepTrace currently provides tools for:
   models;
 - onset-detection summaries from probability traces, with baseline-window
   thresholds, false-alarm rates, and detection latencies;
+- stream-level stimulus event detection for long probability traces with zero,
+  one, or many stimulus occurrences;
 - conservative sticky switching models for probability traces with shuffled
   time, shuffled label, and baseline-window controls;
 - category-conditioned semantic stage summaries for asking whether decoded
@@ -120,6 +122,31 @@ python -m reptrace.onset_detection \
 
 The threshold summary reports baseline false-positive rates separately from
 post-stimulus threshold-crossing rates.
+
+Detect zero, one, or many stimulus events in a long probability stream:
+
+```bash
+python -m reptrace.stimulus_detection \
+  results/sub-01_stream_observations.csv \
+  --annotations-csv results/sub-01_stimulus_annotations.csv \
+  --stream-column stream_id \
+  --score-mode class_probability \
+  --threshold-window -0.35 -0.05 \
+  --threshold-method max_run \
+  --threshold-quantile 0.95 \
+  --detection-window 0.0 inf \
+  --min-consecutive 2 \
+  --merge-gap 0.05 \
+  --refractory 0.20 \
+  --match-tolerance 0.10 \
+  --out-events results/sub-01_stimulus_events.csv \
+  --out-summary results/sub-01_stimulus_event_summary.csv \
+  --out-thresholds results/sub-01_stimulus_thresholds.csv
+```
+
+This stream-oriented detector returns one row per detected event, including the
+stimulus class, onset, offset, peak, confirmed detection time, and optional
+annotation match.
 
 If the events CSV has the NOD `stim_is_animate` column but no named decoding
 condition yet, create one:
