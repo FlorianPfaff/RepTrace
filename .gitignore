@@ -1,44 +1,50 @@
-# Ignore files by codex
-.codex_*
-_reference_pyrecest/
-
-# Byte-compiled / optimized / DLL files
+# Python caches and test artifacts
 __pycache__/
 *.py[cod]
 *$py.class
+.pytest_cache/
+.pytest-tmp/
+.pytest_tmp/
+.pytest_tmp*/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
 
-# Distribution / packaging
+# Virtual environments and local configuration
+.env
+.venv/
+venv/
+env/
+ENV/
+
+# Python packaging
 build/
 dist/
 *.egg-info/
 .eggs/
 *.egg
+wheels/
 
-# Unit test / coverage reports
-.coverage
-.coverage.*
-.pytest_cache/
-.pytest-tmp/
-.ruff_cache/
-htmlcov/
-coverage.xml
+# MegaLinter reports
+megalinter-reports/
+mega-linter.log
+mega-linter.report
 
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-
-# Documentation
-site/
-docs/_build/
-
-# IDEs
+# Editors and OS files
 .idea/
 .vscode/settings.json
+.DS_Store
+Thumbs.db
+*.swp
 
-# Data and benchmark outputs
+# Local reference checkout and generated data
+.codex_*
+_reference_pyrecest/
 data/
 results/
 !src/reptrace/results/
@@ -46,3 +52,7 @@ results/
 *.fif
 *.h5
 *.hdf5
+
+# Documentation builds
+site/
+docs/_build/
