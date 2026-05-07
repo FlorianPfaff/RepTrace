@@ -177,9 +177,9 @@ def test_annotation_matching_and_summary_report_event_level_metrics():
     )
     annotations = pd.DataFrame(
         [
-            {"stream_id": "run-1", "annotation_id": "ann-1", "stimulus_class": "A", "onset_time": 0.10},
-            {"stream_id": "run-1", "annotation_id": "ann-2", "stimulus_class": "B", "onset_time": 0.80},
-            {"stream_id": "run-1", "annotation_id": "ann-3", "stimulus_class": "A", "onset_time": 1.40},
+            {"stream_id": "run-1", "annotation_id": 1, "stimulus_class": "A", "onset_time": 0.10},
+            {"stream_id": "run-1", "annotation_id": 2, "stimulus_class": "B", "onset_time": 0.80},
+            {"stream_id": "run-1", "annotation_id": 3, "stimulus_class": "A", "onset_time": 1.40},
         ]
     )
 
@@ -192,7 +192,7 @@ def test_annotation_matching_and_summary_report_event_level_metrics():
     summary = summarize_stimulus_events(matched, annotations=annotations)
 
     assert matched["is_true_positive"].all()
-    assert matched["matched_annotation_id"].tolist() == ["ann-1", "ann-2", "ann-3"]
+    assert matched["matched_annotation_id"].tolist() == [1, 2, 3]
     assert summary.iloc[0]["precision"] == 1.0
     assert summary.iloc[0]["recall"] == 1.0
     assert summary.iloc[0]["f1"] == 1.0
