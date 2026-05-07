@@ -1,5 +1,6 @@
 site_name: RepTrace
 site_description: Probabilistic tracing of neural representations over time
+site_url: https://ips-stuttgart.github.io/RepTrace/
 repo_url: https://github.com/IPS-Stuttgart/RepTrace
 repo_name: IPS-Stuttgart/RepTrace
 
