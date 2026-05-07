@@ -128,11 +128,24 @@ def _threshold_for_group(
     return float(scores.quantile(threshold_quantile))
 
 
-def _segment_run_score(segment: pd.DataFrame) -> float:
-    scores = pd.to_numeric(segment["_onset_score"], errors="coerce").dropna()
-    if scores.empty:
-        return np.nan
-    return float(scores.min())
+def _prediction_values(frame: pd.DataFrame) -> np.ndarray:
+    if "predicted_label" in frame.columns:
+        return frame["predicted_label"].to_numpy(dtype=object)
+    if "predicted_class" in frame.columns:
+        return frame["predicted_class"].to_numpy(dtype=object)
+    return np.full(len(frame), None, dtype=object)
+
+
+def _sequence_run_duration(frame: pd.DataFrame, start: int, stop: int) -> float:
+    if {"window_start", "window_stop"}.issubset(frame.columns):
+        starts = pd.to_numeric(frame["window_start"], errors="coerce").to_numpy(dtype=float)
+        stops = pd.to_numeric(frame["window_stop"], errors="coerce").to_numpy(dtype=float)
+        if np.isfinite(starts[start]) and np.isfinite(stops[stop]):
+            return float(stops[stop] - starts[start])
+    times = pd.to_numeric(frame["time"], errors="coerce").to_numpy(dtype=float)
+    if not np.isfinite(times[start]) or not np.isfinite(times[stop]):
+        return float("nan")
+    return float(times[stop] - times[start])
 
 
 def _valid_run_score_candidates(
@@ -148,12 +161,18 @@ def _valid_run_score_candidates(
         raise ValueError("min_duration must be non-negative when provided.")
 
     sequence_frame = sequence_frame.sort_values("time").reset_index(drop=True)
+    score_values = pd.to_numeric(sequence_frame["_onset_score"], errors="coerce").to_numpy(dtype=float)
+    predictions = _prediction_values(sequence_frame)
     scores: list[float] = []
-    for start in range(len(sequence_frame)):
+    for start in range(len(score_values)):
         previous_prediction = None
-        for stop in range(start, len(sequence_frame)):
-            segment = sequence_frame.iloc[start : stop + 1]
-            prediction = _prediction_value(segment.iloc[-1])
+        run_min = float("inf")
+        for stop in range(start, len(score_values)):
+            score = score_values[stop]
+            if not np.isfinite(score):
+                break
+            run_min = min(run_min, float(score))
+            prediction = predictions[stop]
             if (
                 require_stable_prediction
                 and previous_prediction is not None
@@ -161,11 +180,11 @@ def _valid_run_score_candidates(
             ):
                 break
             previous_prediction = prediction
-            if len(segment) < min_consecutive:
+            if stop - start + 1 < min_consecutive:
                 continue
-            if min_duration is not None and _run_duration(segment) < min_duration:
+            if min_duration is not None and _sequence_run_duration(sequence_frame, start, stop) < min_duration:
                 continue
-            scores.append(_segment_run_score(segment))
+            scores.append(run_min)
     return [score for score in scores if np.isfinite(score)]
 
 
@@ -255,11 +274,12 @@ def _candidate_segments(
     segments: list[pd.DataFrame] = []
     start_position: int | None = None
     previous_prediction: object = None
-    rows = list(candidates.iterrows())
+    scores = pd.to_numeric(candidates["_onset_score"], errors="coerce").to_numpy(dtype=float)
+    predictions = _prediction_values(candidates)
 
-    for position, (_, row) in enumerate(rows):
-        above_threshold = bool(row["_onset_score"] >= threshold) if pd.notna(row["_onset_score"]) else False
-        prediction = _prediction_value(row)
+    for position, score in enumerate(scores):
+        above_threshold = bool(np.isfinite(score) and score >= threshold)
+        prediction = predictions[position]
         if not above_threshold:
             if start_position is not None:
                 segments.append(candidates.iloc[start_position:position])

@@ -32,6 +32,20 @@ RepTrace currently provides tools for:
 - CSV aggregation, plotting, reporting, and subject-level inference for
   downstream interpretation.
 
+## Project boundary with PyMEGDec
+
+RepTrace owns the dataset-independent M/EEG decoding layer. Keep reusable
+feature-matrix decoding, classifier calibration, temporal generalization,
+onset/state inference, confusion and per-class metrics, MNE `Epochs` decoding,
+and generic summary-table/reporting helpers here.
+
+Dataset-specific projects should adapt their own file formats and experimental
+conventions into RepTrace's feature-matrix and probability-observation
+interfaces. In particular, PyMEGDec owns the MATLAB `.mat` loaders, the
+`Part*Data.mat` / `Part*CueData.mat` participant-file conventions, CTF sensor
+geometry handling, alpha analyses, stimulus-specific defaults, and
+paper-facing export scripts for the MEG dataset it was developed around.
+
 ## Installation
 
 RepTrace requires Python 3.11 or newer and earlier than Python 3.14.
