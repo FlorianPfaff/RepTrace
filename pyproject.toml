@@ -7,6 +7,19 @@ version = "0.1.0"
 license = "MIT"
 packages = [{ include = "reptrace", from = "src" }]
 
+[tool.poetry.scripts]
+reptrace = "reptrace.cli:main"
+reptrace-benchmark = "reptrace.benchmark:main"
+reptrace-metadata = "reptrace.metadata:main"
+reptrace-mne-time-decode = "reptrace.mne_time_decode:main"
+reptrace-onset-detect = "reptrace.onset_detection:main"
+reptrace-plot-time-decode = "reptrace.plot_time_decode:main"
+reptrace-results = "reptrace.results:main"
+reptrace-stimulus-detect = "reptrace.stimulus_detection:main"
+reptrace-temporal-model = "reptrace.temporal_model:main"
+reptrace-temporal-state-workflow = "reptrace.temporal_state_workflow:main"
+reptrace-validate-manifest = "reptrace.validate_manifest:main"
+
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
