@@ -66,16 +66,37 @@ Alternatively, install the package in editable mode with pip:
 python -m pip install -e .
 ```
 
+Installed environments expose both a grouped `reptrace` command and focused
+workflow commands such as `reptrace-benchmark`, `reptrace-mne-time-decode`,
+`reptrace-onset-detect`, `reptrace-stimulus-detect`, and
+`reptrace-temporal-model`. The equivalent `python -m reptrace.<module>` forms
+remain available for source-checkout debugging.
+
 ## Quickstart
 
 Run the pilot NOD-EEG benchmark from a manifest:
 
 ```bash
-python -m reptrace.validate_manifest \
+reptrace-validate-manifest \
   benchmarks/nod_animate_sub01.csv \
   --report-out results/nod_animate_sub01_validation.csv
 
-python -m reptrace.benchmark \
+reptrace-benchmark \
+  benchmarks/nod_animate_sub01.csv \
+  --out-dir results/nod_animate_sub01 \
+  --aggregate-out results/nod_animate_sub01_summary.csv \
+  --plot-out results/nod_animate_sub01_summary.png \
+  --chance 0.5
+```
+
+The grouped CLI provides the same workflows:
+
+```bash
+reptrace validate-manifest \
+  benchmarks/nod_animate_sub01.csv \
+  --report-out results/nod_animate_sub01_validation.csv
+
+reptrace benchmark \
   benchmarks/nod_animate_sub01.csv \
   --out-dir results/nod_animate_sub01 \
   --aggregate-out results/nod_animate_sub01_summary.csv \
@@ -86,7 +107,7 @@ python -m reptrace.benchmark \
 Run time-resolved decoding directly on an MNE epochs file with metadata:
 
 ```bash
-python -m reptrace.mne_time_decode \
+reptrace-mne-time-decode \
   --epochs path/to/sub-01_epo.fif \
   --metadata-csv path/to/sub-01_events.csv \
   --label-column stim_is_animate \
@@ -98,7 +119,7 @@ python -m reptrace.mne_time_decode \
 Plot the resulting time course:
 
 ```bash
-python -m reptrace.plot_time_decode \
+reptrace-plot-time-decode \
   results/nod_sub-01_animate.csv \
   --chance 0.5 \
   --out results/nod_sub-01_animate.png
@@ -108,7 +129,7 @@ Detect the first threshold-crossing representation time from probability
 observations:
 
 ```bash
-python -m reptrace.onset_detection \
+reptrace-onset-detect \
   results/nod_sub-01_animate_observations.csv \
   --threshold-window -0.35 -0.05 \
   --threshold-quantile 0.95 \
@@ -126,7 +147,7 @@ post-stimulus threshold-crossing rates.
 Detect zero, one, or many stimulus events in a long probability stream:
 
 ```bash
-python -m reptrace.stimulus_detection \
+reptrace-stimulus-detect \
   results/sub-01_stream_observations.csv \
   --annotations-csv results/sub-01_stimulus_annotations.csv \
   --stream-column stream_id \
@@ -152,7 +173,7 @@ If the events CSV has the NOD `stim_is_animate` column but no named decoding
 condition yet, create one:
 
 ```bash
-python -m reptrace.metadata \
+reptrace-metadata \
   --events-csv data/nod/sub-01_events.csv \
   --source-column stim_is_animate \
   --positive-pattern "True" \
@@ -165,7 +186,7 @@ python -m reptrace.metadata \
 After running several subjects, aggregate them:
 
 ```bash
-python -m reptrace.results \
+reptrace-results \
   results/nod_sub-01_animate.csv \
   results/nod_sub-02_animate.csv \
   --out results/nod_animate_summary.csv
@@ -193,7 +214,7 @@ models, compares controls, summarizes semantic stages, and writes compact
 artifacts:
 
 ```bash
-python -m reptrace.temporal_state_workflow \
+reptrace-temporal-state-workflow \
   --data-root data/nod \
   --out-dir results/temporal_state_inference \
   --compact-export-dir ../RepTrace-Compact-Results/results/temporal_state_inference \
