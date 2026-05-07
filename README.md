@@ -1,5 +1,7 @@
 # RepTrace
 
+[![Documentation](https://github.com/IPS-Stuttgart/RepTrace/actions/workflows/pages.yml/badge.svg)](https://ips-stuttgart.github.io/RepTrace/)
+
 Probabilistic tracing of neural representations over time.
 
 RepTrace is an early-stage Python toolkit for benchmarking calibrated,
@@ -177,6 +179,9 @@ test before launching the full run. Resume is enabled by default; pass
 `--no-resume` only when existing subject-decoder outputs should be overwritten.
 
 ## Documentation
+
+The documentation site is published at
+https://ips-stuttgart.github.io/RepTrace/.
 
 The `docs/` directory contains the project documentation:
 
