@@ -37,12 +37,11 @@ if "conflict_resolution" not in EVENT_COLUMNS:
 
 fit_stimulus_detection_thresholds = _legacy.fit_stimulus_detection_thresholds
 read_stimulus_probability_observations = _legacy.read_stimulus_probability_observations
-match_stimulus_annotations = _legacy.match_stimulus_annotations
-summarize_stimulus_events = _legacy.summarize_stimulus_events
 _present_columns = _legacy._present_columns
 _group_columns = _legacy._group_columns
 _stream_columns = _legacy._stream_columns
 _run_duration = _legacy._run_duration
+_annotation_id = _legacy._annotation_id
 
 
 def _unique_columns(columns: Sequence[str]) -> list[str]:
@@ -193,19 +192,230 @@ def detect_stimulus_events(
     return _reindex_events(events, partition_columns=partition_columns)
 
 
-def _write_stimulus_csv_outputs(
-    *,
+def _annotation_value(annotation: pd.Series, *columns: str, default: object = np.nan) -> object:
+    for column in columns:
+        if column in annotation and pd.notna(annotation[column]):
+            return annotation[column]
+    return default
+
+
+def _add_annotation_candidate_columns(events: pd.DataFrame) -> pd.DataFrame:
+    events = events.copy()
+    events["matched_annotation_id"] = np.nan
+    events["matched_annotation_onset_time"] = np.nan
+    events["matched_annotation_class"] = ""
+    events["matched_annotation_label"] = np.nan
+    events["candidate_annotation_id"] = np.nan
+    events["candidate_annotation_onset_time"] = np.nan
+    events["candidate_annotation_class"] = ""
+    events["candidate_annotation_label"] = np.nan
+    events["candidate_latency"] = np.nan
+    events["latency"] = np.nan
+    events["is_true_positive"] = False
+    events["is_duplicate_detection"] = False
+    return events
+
+
+def match_stimulus_annotations(
     events: pd.DataFrame,
-    summary: pd.DataFrame,
-    thresholds: pd.DataFrame,
-    out_events: Path | None,
-    out_summary: Path | None,
-    out_thresholds: Path | None,
-) -> None:
-    for path, frame in ((out_events, events), (out_summary, summary), (out_thresholds, thresholds)):
-        if path is not None:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            frame.to_csv(path, index=False)
+    annotations: pd.DataFrame,
+    *,
+    stream_columns: Sequence[str] | None = None,
+    match_tolerance: float = 0.1,
+    require_class_match: bool = True,
+) -> pd.DataFrame:
+    """Greedily match detected events to annotated stimulus onsets.
+
+    Besides the one-to-one true-positive assignment, the matcher records the
+    nearest within-tolerance annotation candidate for each event. If that
+    candidate has already been claimed, the event is marked as a duplicate
+    detection, which lets summaries distinguish duplicates from ordinary false
+    alarms.
+    """
+    if match_tolerance < 0:
+        raise ValueError("match_tolerance must be non-negative.")
+    matched = _add_annotation_candidate_columns(events)
+    if events.empty:
+        return matched
+    streams = _stream_columns(events, stream_columns)
+    if "onset_time" not in annotations.columns:
+        raise ValueError("Annotation rows must contain onset_time.")
+    used: set[object] = set()
+
+    for event_index, event in matched.sort_values("onset_time").iterrows():
+        candidates = annotations.copy()
+        for column in streams:
+            if column in candidates.columns:
+                candidates = candidates.loc[candidates[column].astype(str) == str(event[column])]
+        if require_class_match:
+            if "stimulus_class" in candidates.columns:
+                candidates = candidates.loc[candidates["stimulus_class"].astype(str) == str(event["stimulus_class"])]
+            elif "stimulus_label" in candidates.columns:
+                candidates = candidates.loc[candidates["stimulus_label"].astype(str) == str(event["stimulus_label"])]
+        if candidates.empty:
+            continue
+        candidates = candidates.copy()
+        candidates["_annotation_id"] = [_annotation_id(row, index) for index, row in candidates.iterrows()]
+        candidates["_latency"] = float(event["onset_time"]) - pd.to_numeric(candidates["onset_time"], errors="coerce")
+        candidates["_abs_latency"] = candidates["_latency"].abs()
+        candidates = candidates.loc[candidates["_abs_latency"] <= match_tolerance].sort_values("_abs_latency")
+        if candidates.empty:
+            continue
+
+        nearest = candidates.iloc[0]
+        nearest_id = nearest["_annotation_id"]
+        matched.loc[event_index, "candidate_annotation_id"] = nearest_id
+        matched.loc[event_index, "candidate_annotation_onset_time"] = float(nearest["onset_time"])
+        matched.loc[event_index, "candidate_annotation_class"] = _annotation_value(nearest, "stimulus_class", default="")
+        matched.loc[event_index, "candidate_annotation_label"] = _annotation_value(nearest, "stimulus_label", default=np.nan)
+        matched.loc[event_index, "candidate_latency"] = float(nearest["_latency"])
+
+        available = candidates.loc[~candidates["_annotation_id"].isin(used)]
+        if available.empty:
+            matched.loc[event_index, "is_duplicate_detection"] = True
+            continue
+
+        annotation = available.iloc[0]
+        annotation_id = annotation["_annotation_id"]
+        used.add(annotation_id)
+        latency = float(annotation["_latency"])
+        matched.loc[event_index, "matched_annotation_id"] = annotation_id
+        matched.loc[event_index, "matched_annotation_onset_time"] = float(annotation["onset_time"])
+        matched.loc[event_index, "matched_annotation_class"] = _annotation_value(annotation, "stimulus_class", default="")
+        matched.loc[event_index, "matched_annotation_label"] = _annotation_value(annotation, "stimulus_label", default=np.nan)
+        matched.loc[event_index, "latency"] = latency
+        matched.loc[event_index, "is_true_positive"] = True
+    return matched
+
+
+def _duration_minutes(
+    observations: pd.DataFrame | None,
+    *,
+    group_values: dict[str, object],
+    stream_columns: Sequence[str] | None,
+) -> float:
+    if observations is None or observations.empty or "time" not in observations.columns:
+        return np.nan
+    frame = observations.copy()
+    for column, value in group_values.items():
+        if column in frame.columns:
+            frame = frame.loc[frame[column].astype(str) == str(value)]
+    if frame.empty:
+        return np.nan
+
+    streams = _present_columns(frame, stream_columns or [])
+    grouped = frame.groupby(streams, sort=False) if streams else [((), frame)]
+    seconds = 0.0
+    for _, stream_frame in grouped:
+        times = pd.to_numeric(stream_frame["time"], errors="coerce").dropna()
+        if len(times) >= 2:
+            seconds += float(times.max() - times.min())
+    return seconds / 60.0 if seconds > 0 else np.nan
+
+
+def _matched_events(group_frame: pd.DataFrame) -> pd.DataFrame:
+    if "is_true_positive" in group_frame.columns:
+        return group_frame.loc[group_frame["is_true_positive"].fillna(False).astype(bool)]
+    if "matched_annotation_id" in group_frame.columns:
+        return group_frame.loc[group_frame["matched_annotation_id"].notna()]
+    return group_frame.iloc[0:0]
+
+
+def _class_accuracy_for_matched_events(group_frame: pd.DataFrame) -> float:
+    matched = _matched_events(group_frame)
+    if matched.empty or "matched_annotation_class" not in matched.columns:
+        return np.nan
+    annotated_classes = matched["matched_annotation_class"].astype(str)
+    known = annotated_classes.ne("") & annotated_classes.ne("nan")
+    if not known.any():
+        return np.nan
+    return float(matched.loc[known, "stimulus_class"].astype(str).eq(annotated_classes.loc[known]).mean())
+
+
+def _latency_sd(latencies: pd.Series) -> float:
+    if len(latencies) > 1:
+        return float(latencies.std(ddof=1))
+    if len(latencies) == 1:
+        return 0.0
+    return np.nan
+
+
+def summarize_stimulus_events(
+    events: pd.DataFrame,
+    *,
+    annotations: pd.DataFrame | None = None,
+    observations: pd.DataFrame | None = None,
+    group_columns: Sequence[str] | None = None,
+    stream_columns: Sequence[str] | None = None,
+) -> pd.DataFrame:
+    """Summarize event-level detection quality.
+
+    The summary exposes both the original ``*_count``/``latency_*`` columns and
+    checklist-oriented aliases such as ``true_positives`` and
+    ``onset_latency_mean`` for downstream compatibility.
+    """
+    groups = _group_columns(events, group_columns) if not events.empty else list(group_columns or [])
+    rows = []
+    grouped = events.groupby(groups, sort=True) if groups and not events.empty else [((), events)]
+    for keys, group_frame in grouped:
+        key_values = keys if isinstance(keys, tuple) else (keys,)
+        group_values = dict(zip(groups, key_values, strict=True))
+        detected = len(group_frame)
+        if "is_true_positive" in group_frame.columns:
+            true_positives = int(group_frame["is_true_positive"].fillna(False).astype(bool).sum())
+        elif "matched_annotation_id" in group_frame.columns:
+            true_positives = int(group_frame["matched_annotation_id"].notna().sum())
+        else:
+            true_positives = detected
+        n_annotations = np.nan
+        if annotations is not None:
+            annotation_frame = annotations
+            for column, value in group_values.items():
+                if column in annotation_frame.columns:
+                    annotation_frame = annotation_frame.loc[annotation_frame[column].astype(str) == str(value)]
+            n_annotations = len(annotation_frame)
+        false_positives = detected - true_positives
+        false_negatives = int(n_annotations - true_positives) if np.isfinite(n_annotations) else np.nan
+        precision = true_positives / detected if detected else np.nan
+        recall = true_positives / n_annotations if np.isfinite(n_annotations) and n_annotations else np.nan
+        f1 = 2.0 * precision * recall / (precision + recall) if np.isfinite(precision) and np.isfinite(recall) and precision + recall > 0 else np.nan
+        duration_minutes = _duration_minutes(observations, group_values=group_values, stream_columns=stream_columns)
+        false_alarms_per_minute = false_positives / duration_minutes if np.isfinite(duration_minutes) and duration_minutes > 0 else np.nan
+        duplicate_detections = (
+            int(group_frame["is_duplicate_detection"].fillna(False).astype(bool).sum())
+            if "is_duplicate_detection" in group_frame.columns
+            else 0
+        )
+        latencies = pd.to_numeric(group_frame.get("latency", pd.Series(dtype=float)), errors="coerce").dropna()
+        latency_mean = float(latencies.mean()) if not latencies.empty else np.nan
+        latency_median = float(latencies.median()) if not latencies.empty else np.nan
+        latency_sd = _latency_sd(latencies)
+        rows.append(
+            {
+                **group_values,
+                "n_detections": detected,
+                "n_annotations": n_annotations,
+                "true_positives": true_positives,
+                "false_positives": false_positives,
+                "false_negatives": false_negatives,
+                "true_positive_count": true_positives,
+                "false_positive_count": false_positives,
+                "false_negative_count": false_negatives,
+                "precision": precision,
+                "recall": recall,
+                "f1": f1,
+                "false_alarms_per_minute": false_alarms_per_minute,
+                "duplicate_detections": duplicate_detections,
+                "class_accuracy_for_matched_events": _class_accuracy_for_matched_events(group_frame),
+                "onset_latency_mean": latency_mean,
+                "onset_latency_median": latency_median,
+                "onset_latency_sd": latency_sd,
+                "latency_mean": latency_mean,
+                "latency_median": latency_median,
+                "latency_sd": latency_sd,
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def detect_stimulus_events_from_csvs(
@@ -231,10 +441,11 @@ def detect_stimulus_events_from_csvs(
     out_summary: Path | None = None,
     out_thresholds: Path | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    events, _legacy_summary, thresholds = _legacy.detect_stimulus_events_from_csvs(
-        observation_csvs,
-        annotations_csv=None,
-        thresholds_csv=thresholds_csv,
+    observations = read_stimulus_probability_observations(observation_csvs)
+    thresholds = pd.read_csv(thresholds_csv) if thresholds_csv is not None else None
+    events = detect_stimulus_events(
+        observations,
+        thresholds=thresholds,
         threshold_window=threshold_window,
         threshold_quantile=threshold_quantile,
         threshold_method=threshold_method,
@@ -247,28 +458,35 @@ def detect_stimulus_events_from_csvs(
         min_duration=min_duration,
         merge_gap=merge_gap,
         refractory=refractory,
+        conflict_resolution=conflict_resolution,
     )
-    if conflict_resolution not in CONFLICT_RESOLUTION_MODES:
-        raise ValueError(f"conflict_resolution must be one of {CONFLICT_RESOLUTION_MODES}.")
-    events["conflict_resolution"] = conflict_resolution
-    groups = _group_columns(events, group_columns) if not events.empty else list(group_columns or [])
-    streams = _stream_columns(events, stream_columns)
-    partition_columns = _unique_columns([*groups, *streams])
-    events = _resolve_event_conflicts(events, partition_columns=partition_columns, conflict_resolution=conflict_resolution)
-    events = _reindex_events(events, partition_columns=partition_columns)
-
+    if thresholds is None:
+        thresholds = fit_stimulus_detection_thresholds(
+            observations,
+            threshold_window=threshold_window,
+            threshold_quantile=threshold_quantile,
+            threshold_method=threshold_method,
+            score_mode=score_mode,
+            target_classes=target_classes,
+            group_columns=group_columns,
+            stream_columns=stream_columns,
+            min_consecutive=min_consecutive,
+            min_duration=min_duration,
+        )
     annotations = pd.read_csv(annotations_csv) if annotations_csv is not None else None
     if annotations is not None:
         events = match_stimulus_annotations(events, annotations, stream_columns=stream_columns, match_tolerance=match_tolerance)
-    summary = summarize_stimulus_events(events, annotations=annotations, group_columns=group_columns)
-    _write_stimulus_csv_outputs(
-        events=events,
-        summary=summary,
-        thresholds=thresholds,
-        out_events=out_events,
-        out_summary=out_summary,
-        out_thresholds=out_thresholds,
+    summary = summarize_stimulus_events(
+        events,
+        annotations=annotations,
+        observations=observations,
+        group_columns=group_columns,
+        stream_columns=stream_columns,
     )
+    for path, frame in ((out_events, events), (out_summary, summary), (out_thresholds, thresholds)):
+        if path is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            frame.to_csv(path, index=False)
     return events, summary, thresholds
 
 
