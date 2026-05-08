@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import sys
+
 import numpy as np
 import pandas as pd
 
 from reptrace.stimulus_detection import (
     detect_stimulus_events,
     fit_stimulus_detection_thresholds,
+    main as stimulus_detection_main,
     match_stimulus_annotations,
     summarize_stimulus_events,
 )
@@ -64,6 +67,28 @@ def _stream_frame() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def test_detect_stimulus_events_returns_empty_when_no_stimulus_crosses_threshold():
+    frame = pd.DataFrame(
+        [
+            *_baseline_rows(),
+            _row("run-1", 0.00, (0.34, 0.33, 0.33)),
+            _row("run-1", 0.10, (0.35, 0.33, 0.32)),
+            _row("run-1", 0.20, (0.33, 0.34, 0.33)),
+        ]
+    )
+
+    events = detect_stimulus_events(
+        frame,
+        stream_columns=("stream_id",),
+        threshold_window=THRESHOLD_WINDOW,
+        threshold_quantile=1.0,
+        detection_window=(0.0, float("inf")),
+    )
+
+    assert events.empty
+    assert {"stream_id", "event_index", "stimulus_class", "onset_time", "score_threshold"}.issubset(events.columns)
+
+
 def test_detect_stimulus_events_returns_multiple_events_per_stream():
     events = detect_stimulus_events(
         _stream_frame(),
@@ -101,6 +126,59 @@ def test_fit_thresholds_can_be_reused_for_detection():
     assert thresholds.set_index("stimulus_class").loc[["A", "B", "C"], "score_threshold"].eq(0.60).all()
     assert len(events) == 3
     assert events["score_threshold"].notna().all()
+
+
+def test_predicted_class_confidence_only_scores_matching_winning_class():
+    frame = pd.DataFrame(
+        [
+            _row("run-1", 0.10, (0.45, 0.55, 0.00)),
+            _row("run-1", 0.20, (0.46, 0.54, 0.00)),
+        ]
+    )
+    thresholds = pd.DataFrame(
+        [
+            {
+                "subject": "sub-01",
+                "decoder": "logistic",
+                "emission_mode": "calibrated",
+                "stimulus_label": 0,
+                "stimulus_class": "A",
+                "score_column": "prob_class_0",
+                "score_mode": "predicted_class_confidence",
+                "score_threshold": 0.40,
+                "threshold_method": "point",
+                "threshold_quantile": 1.0,
+                "threshold_window_start": THRESHOLD_WINDOW[0],
+                "threshold_window_stop": THRESHOLD_WINDOW[1],
+            },
+            {
+                "subject": "sub-01",
+                "decoder": "logistic",
+                "emission_mode": "calibrated",
+                "stimulus_label": 1,
+                "stimulus_class": "B",
+                "score_column": "prob_class_1",
+                "score_mode": "predicted_class_confidence",
+                "score_threshold": 0.40,
+                "threshold_method": "point",
+                "threshold_quantile": 1.0,
+                "threshold_window_start": THRESHOLD_WINDOW[0],
+                "threshold_window_stop": THRESHOLD_WINDOW[1],
+            },
+        ]
+    )
+
+    events = detect_stimulus_events(
+        frame,
+        thresholds=thresholds,
+        stream_columns=("stream_id",),
+        min_consecutive=2,
+    )
+
+    assert events["stimulus_class"].tolist() == ["B"]
+    assert events.iloc[0]["score_mode"] == "predicted_class_confidence"
+    assert events.iloc[0]["score_at_onset"] == 0.55
+    assert events.iloc[0]["peak_score"] == 0.55
 
 
 def test_merge_gap_collapses_brief_interruptions():
@@ -196,3 +274,60 @@ def test_annotation_matching_and_summary_report_event_level_metrics():
     assert summary.iloc[0]["precision"] == 1.0
     assert summary.iloc[0]["recall"] == 1.0
     assert summary.iloc[0]["f1"] == 1.0
+
+
+def test_stimulus_detection_cli_writes_events_summary_and_thresholds(tmp_path, monkeypatch):
+    observations_csv = tmp_path / "observations.csv"
+    annotations_csv = tmp_path / "annotations.csv"
+    out_events = tmp_path / "stimulus_events.csv"
+    out_summary = tmp_path / "stimulus_summary.csv"
+    out_thresholds = tmp_path / "stimulus_thresholds.csv"
+    _stream_frame().to_csv(observations_csv, index=False)
+    pd.DataFrame(
+        [
+            {"stream_id": "run-1", "annotation_id": 1, "stimulus_class": "A", "onset_time": 0.10},
+            {"stream_id": "run-1", "annotation_id": 2, "stimulus_class": "B", "onset_time": 0.80},
+            {"stream_id": "run-1", "annotation_id": 3, "stimulus_class": "A", "onset_time": 1.40},
+        ]
+    ).to_csv(annotations_csv, index=False)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "reptrace-stimulus-detect",
+            str(observations_csv),
+            "--annotations-csv",
+            str(annotations_csv),
+            "--stream-column",
+            "stream_id",
+            "--threshold-window",
+            str(THRESHOLD_WINDOW[0]),
+            str(THRESHOLD_WINDOW[1]),
+            "--threshold-quantile",
+            "1.0",
+            "--detection-window",
+            "0.0",
+            "inf",
+            "--min-consecutive",
+            "2",
+            "--out-events",
+            str(out_events),
+            "--out-summary",
+            str(out_summary),
+            "--out-thresholds",
+            str(out_thresholds),
+        ],
+    )
+
+    stimulus_detection_main()
+
+    events = pd.read_csv(out_events)
+    summary = pd.read_csv(out_summary)
+    thresholds = pd.read_csv(out_thresholds)
+    assert events["stimulus_class"].tolist() == ["A", "B", "A"]
+    assert events["is_true_positive"].all()
+    assert summary.iloc[0]["precision"] == 1.0
+    assert summary.iloc[0]["recall"] == 1.0
+    assert summary.iloc[0]["f1"] == 1.0
+    assert set(thresholds["stimulus_class"]) == {"A", "B", "C"}
