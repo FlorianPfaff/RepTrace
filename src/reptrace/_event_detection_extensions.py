@@ -9,7 +9,16 @@ from reptrace._onset_detection_runs import first_detection_run as _select_first_
 def _install_onset_detection_extensions() -> None:
     from reptrace import onset_detection as onset
 
-    def _detection_runs(candidates, *, threshold, min_consecutive, min_duration, require_stable_prediction):
+    def _detection_runs(
+        candidates,
+        *,
+        threshold,
+        min_consecutive,
+        min_duration,
+        require_stable_prediction,
+        merge_gap=None,
+        refractory=None,
+    ):
         """Return all valid above-threshold onset runs."""
         return _enumerate_detection_runs(
             candidates,
@@ -17,6 +26,8 @@ def _install_onset_detection_extensions() -> None:
             min_consecutive=min_consecutive,
             min_duration=min_duration,
             require_stable_prediction=require_stable_prediction,
+            merge_gap=merge_gap,
+            refractory=refractory,
             segmenter=onset._candidate_segments,  # noqa: SLF001
             duration=onset._run_duration,  # noqa: SLF001
         )
