@@ -35,6 +35,7 @@ scikit-learn = "*"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "*"
+pytest-benchmark = "*"
 ruff = "*"
 
 [tool.poetry.group.docs.dependencies]
@@ -54,6 +55,9 @@ profile = "black"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--basetemp=.pytest-tmp"
+markers = [
+  "performance: deterministic performance-regression tests, skipped unless requested",
+]
 
 [tool.pylint.MAIN]
 py-version = "3.13"
