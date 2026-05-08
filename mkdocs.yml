@@ -18,6 +18,7 @@ nav:
       - Inference: reference/inference.md
       - Metadata: reference/metadata.md
       - Metrics: reference/metrics.md
+      - Observation Schema: reference/observation-schema.md
       - Onset Detection: reference/onset-detection.md
       - Onset Validation: reference/onset-validation.md
       - Stimulus Detection: reference/stimulus-detection.md
