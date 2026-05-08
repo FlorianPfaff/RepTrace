@@ -11,6 +11,7 @@ COMMAND_MODULES = {
     "benchmark": "reptrace.benchmark",
     "metadata": "reptrace.metadata",
     "mne-time-decode": "reptrace.mne_time_decode",
+    "observation-schema": "reptrace.observation_schema",
     "onset-detect": "reptrace.onset_detection",
     "onset-detection": "reptrace.onset_detection",
     "plot-time-decode": "reptrace.plot_time_decode",
@@ -20,6 +21,7 @@ COMMAND_MODULES = {
     "temporal-model": "reptrace.temporal_model",
     "temporal-state-workflow": "reptrace.temporal_state_workflow",
     "validate-manifest": "reptrace.validate_manifest",
+    "validate-observations": "reptrace.observation_schema",
 }
 
 

@@ -19,6 +19,7 @@ reptrace-stimulus-detect = "reptrace.stimulus_detection:main"
 reptrace-temporal-model = "reptrace.temporal_model:main"
 reptrace-temporal-state-workflow = "reptrace.temporal_state_workflow:main"
 reptrace-validate-manifest = "reptrace.validate_manifest:main"
+reptrace-validate-observations = "reptrace.observation_schema:main"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
