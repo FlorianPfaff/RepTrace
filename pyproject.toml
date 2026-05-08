@@ -35,7 +35,6 @@ scikit-learn = "*"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "*"
-pytest-benchmark = "*"
 ruff = "*"
 
 [tool.poetry.group.docs.dependencies]
