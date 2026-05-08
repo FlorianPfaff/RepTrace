@@ -373,6 +373,55 @@ def test_class_accuracy_for_matched_events_can_score_wrong_classes():
     assert summary.iloc[0]["class_accuracy_for_matched_events"] == 2 / 3
 
 
+def test_stimulus_detection_cli_writes_events_and_summary_without_annotations(tmp_path, monkeypatch):
+    observations_csv = tmp_path / "observations.csv"
+    out_events = tmp_path / "stimulus_events.csv"
+    out_summary = tmp_path / "stimulus_summary.csv"
+    _stream_frame().to_csv(observations_csv, index=False)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "reptrace-stimulus-detect",
+            str(observations_csv),
+            "--stream-column",
+            "stream_id",
+            "--score-mode",
+            "class_probability",
+            "--threshold-window",
+            str(THRESHOLD_WINDOW[0]),
+            str(THRESHOLD_WINDOW[1]),
+            "--threshold-method",
+            "max_run",
+            "--threshold-quantile",
+            "1.0",
+            "--detection-window",
+            "0.0",
+            "inf",
+            "--min-consecutive",
+            "2",
+            "--merge-gap",
+            "0.05",
+            "--refractory",
+            "0.20",
+            "--out-events",
+            str(out_events),
+            "--out-summary",
+            str(out_summary),
+        ],
+    )
+
+    stimulus_detection_main()
+
+    events = pd.read_csv(out_events)
+    summary = pd.read_csv(out_summary)
+    assert events["stimulus_class"].tolist() == ["A", "B", "A"]
+    assert events["score_mode"].eq("class_probability").all()
+    assert summary.iloc[0]["n_detections"] == 3
+    assert pd.isna(summary.iloc[0]["n_annotations"])
+
+
 def test_stimulus_detection_cli_writes_events_summary_and_thresholds(tmp_path, monkeypatch):
     observations_csv = tmp_path / "observations.csv"
     annotations_csv = tmp_path / "annotations.csv"
@@ -394,7 +443,7 @@ def test_stimulus_detection_cli_writes_events_summary_and_thresholds(tmp_path, m
         [
             "reptrace-stimulus-detect",
             str(observations_csv),
-            "--annotations-csv",
+            "--annotations",
             str(annotations_csv),
             "--stream-column",
             "stream_id",
