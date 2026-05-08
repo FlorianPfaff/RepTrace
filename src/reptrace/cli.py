@@ -9,6 +9,8 @@ from importlib import import_module
 
 COMMAND_MODULES = {
     "benchmark": "reptrace.benchmark",
+    "event-detect": "reptrace.event_detection",
+    "event-detection": "reptrace.event_detection",
     "metadata": "reptrace.metadata",
     "mne-time-decode": "reptrace.mne_time_decode",
     "observation-schema": "reptrace.observation_schema",
