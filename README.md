@@ -1,1 +1,292 @@
-test
+# RepTrace
+
+[![Documentation](https://github.com/IPS-Stuttgart/RepTrace/actions/workflows/pages.yml/badge.svg)](https://ips-stuttgart.github.io/RepTrace/)
+
+Probabilistic tracing of neural representations over time.
+
+RepTrace is an early-stage Python toolkit for benchmarking calibrated,
+time-resolved decoders on M/EEG data. The initial goal is to turn classifier
+outputs from non-invasive neural recordings into probability traces that are
+useful for studying representational dynamics, planning, and replay-like
+sequences.
+
+## Features
+
+RepTrace currently provides tools for:
+
+- time-resolved decoding from MNE `Epochs` files;
+- held-out trial/time probability observation exports for downstream state
+  models;
+- onset-detection summaries from probability traces, with baseline-window
+  thresholds, false-alarm rates, and detection latencies;
+- stream-level stimulus event detection for long probability traces with zero,
+  one, or many stimulus occurrences;
+- conservative sticky switching models for probability traces with shuffled
+  time, shuffled label, and baseline-window controls;
+- category-conditioned semantic stage summaries for asking whether decoded
+  representations unfold in stable temporal stages;
+- calibrated-versus-uncalibrated emission comparisons for state-inference
+  analyses;
+- calibrated classification metrics, including Brier score and expected
+  calibration error;
+- calibration-aware reports and reliability-bin diagnostics;
+- standard decoder baselines, including logistic regression, LDA, and
+  calibrated linear SVM;
+- grouped cross-validation for session- or run-aware benchmarks; and
+- CSV aggregation, plotting, reporting, and subject-level inference for
+  downstream interpretation.
+
+## Project boundary with PyMEGDec
+
+RepTrace owns the dataset-independent M/EEG decoding layer. Keep reusable
+feature-matrix decoding, classifier calibration, temporal generalization,
+onset/state inference, confusion and per-class metrics, MNE `Epochs` decoding,
+and generic summary-table/reporting helpers here.
+
+Dataset-specific projects should adapt their own file formats and experimental
+conventions into RepTrace's feature-matrix and probability-observation
+interfaces. In particular, PyMEGDec owns the MATLAB `.mat` loaders, the
+`Part*Data.mat` / `Part*CueData.mat` participant-file conventions, CTF sensor
+geometry handling, alpha analyses, stimulus-specific defaults, and
+paper-facing export scripts for the MEG dataset it was developed around.
+
+## Installation
+
+RepTrace requires Python 3.11 or newer and earlier than Python 3.14.
+
+For development from a source checkout, use Poetry:
+
+```bash
+poetry install --with dev
+```
+
+Alternatively, install the package in editable mode with pip:
+
+```bash
+python -m pip install -e .
+```
+
+Installed environments expose both a grouped `reptrace` command and focused
+workflow commands such as `reptrace-benchmark`, `reptrace-mne-time-decode`,
+`reptrace-onset-detect`, `reptrace-stimulus-detect`, and
+`reptrace-temporal-model`. The equivalent `python -m reptrace.<module>` forms
+remain available for source-checkout debugging.
+
+## Quickstart
+
+Run the pilot NOD-EEG benchmark from a manifest:
+
+```bash
+reptrace-validate-manifest \
+  benchmarks/nod_animate_sub01.csv \
+  --report-out results/nod_animate_sub01_validation.csv
+
+reptrace-benchmark \
+  benchmarks/nod_animate_sub01.csv \
+  --out-dir results/nod_animate_sub01 \
+  --aggregate-out results/nod_animate_sub01_summary.csv \
+  --plot-out results/nod_animate_sub01_summary.png \
+  --chance 0.5
+```
+
+The grouped CLI provides the same workflows:
+
+```bash
+reptrace validate-manifest \
+  benchmarks/nod_animate_sub01.csv \
+  --report-out results/nod_animate_sub01_validation.csv
+
+reptrace benchmark \
+  benchmarks/nod_animate_sub01.csv \
+  --out-dir results/nod_animate_sub01 \
+  --aggregate-out results/nod_animate_sub01_summary.csv \
+  --plot-out results/nod_animate_sub01_summary.png \
+  --chance 0.5
+```
+
+Run time-resolved decoding directly on an MNE epochs file with metadata:
+
+```bash
+reptrace-mne-time-decode \
+  --epochs path/to/sub-01_epo.fif \
+  --metadata-csv path/to/sub-01_events.csv \
+  --label-column stim_is_animate \
+  --group-column session \
+  --out results/nod_sub-01_animate.csv \
+  --observations-out results/nod_sub-01_animate_observations.csv
+```
+
+Plot the resulting time course:
+
+```bash
+reptrace-plot-time-decode \
+  results/nod_sub-01_animate.csv \
+  --chance 0.5 \
+  --out results/nod_sub-01_animate.png
+```
+
+Detect the first threshold-crossing representation time from probability
+observations:
+
+```bash
+reptrace-onset-detect \
+  results/nod_sub-01_animate_observations.csv \
+  --threshold-window -0.35 -0.05 \
+  --threshold-quantile 0.95 \
+  --threshold-method max_run \
+  --min-consecutive 2 \
+  --require-stable-prediction \
+  --out-events results/nod_sub-01_animate_onset_events.csv \
+  --out-summary results/nod_sub-01_animate_onset_summary.csv \
+  --out-threshold-summary results/nod_sub-01_animate_threshold_summary.csv
+```
+
+The threshold summary reports baseline false-positive rates separately from
+post-stimulus threshold-crossing rates.
+
+Detect zero, one, or many stimulus events in a long probability stream:
+
+```bash
+python -m reptrace.stimulus_detection \
+  results/sub-01_stream_observations.csv \
+  --stream-column sequence_id \
+  --score-mode class_probability \
+  --threshold-window -0.35 -0.05 \
+  --threshold-method max_run \
+  --threshold-quantile 0.95 \
+  --min-consecutive 2 \
+  --merge-gap 0.05 \
+  --refractory 0.20 \
+  --out-events results/stimulus_events.csv \
+  --out-summary results/stimulus_event_summary.csv
+```
+
+With annotation matching and latency summaries:
+
+```bash
+reptrace-stimulus-detect \
+  results/sub-01_stream_observations.csv \
+  --annotations results/sub-01_stimulus_annotations.csv \
+  --stream-column stream_id \
+  --score-mode class_probability \
+  --threshold-window -0.35 -0.05 \
+  --threshold-method max_run \
+  --threshold-quantile 0.95 \
+  --detection-window 0.0 inf \
+  --min-consecutive 2 \
+  --merge-gap 0.05 \
+  --refractory 0.20 \
+  --match-tolerance 0.10 \
+  --out-events results/sub-01_stimulus_events.csv \
+  --out-summary results/sub-01_stimulus_event_summary.csv \
+  --out-thresholds results/sub-01_stimulus_thresholds.csv
+```
+
+This stream-oriented detector returns one row per detected event, including the
+stimulus class, onset, offset, peak, confirmed detection time, and optional
+annotation match.
+
+If the events CSV has the NOD `stim_is_animate` column but no named decoding
+condition yet, create one:
+
+```bash
+reptrace-metadata \
+  --events-csv data/nod/sub-01_events.csv \
+  --source-column stim_is_animate \
+  --positive-pattern "True" \
+  --label-column condition \
+  --positive-label animate \
+  --negative-label inanimate \
+  --out data/nod/sub-01_metadata_animate.csv
+```
+
+After running several subjects, aggregate them:
+
+```bash
+reptrace-results \
+  results/nod_sub-01_animate.csv \
+  results/nod_sub-02_animate.csv \
+  --out results/nod_animate_summary.csv
+```
+
+## Benchmark Plan
+
+The first public benchmark target is NOD-MEG/NOD-EEG because the dataset
+provides preprocessed MNE epochs and metadata for natural-image decoding. The
+recommended first task is animate-versus-inanimate decoding from the NOD-EEG
+`stim_is_animate` metadata. The second staged task is superclass decoding
+between `canine` and `device` trials, which keeps the same public dataset and
+reporting workflow while testing a different semantic contrast.
+
+THINGS-EEG and THINGS-MEG are natural follow-up benchmarks for larger visual
+object representation experiments. Lab data with task localizers and planning
+periods should come after these public baselines are reproducible.
+
+## Temporal State Workflow
+
+The calibration-aware temporal-state workflow runs the three staged NOD tasks as
+a reusable downstream-state inference evidence pass. It exports probability observations with matched
+calibrated and uncalibrated emissions, fits conservative sticky switching
+models, compares controls, summarizes semantic stages, and writes compact
+artifacts:
+
+```bash
+reptrace-temporal-state-workflow \
+  --data-root data/nod \
+  --out-dir results/temporal_state_inference \
+  --compact-export-dir ../RepTrace-Compact-Results/results/temporal_state_inference \
+  --decoders logistic linear_svm \
+  --n-permutations 100
+```
+
+Use `--max-subjects 1 --task nod_animate --n-permutations 5` for a local smoke
+test before launching the full run. Resume is enabled by default; pass
+`--no-resume` only when existing subject-decoder outputs should be overwritten.
+
+## Documentation
+
+The documentation site is published at
+https://ips-stuttgart.github.io/RepTrace/.
+
+The `docs/` directory contains the project documentation:
+
+- [Getting started](docs/getting-started.md) covers installation and the first
+  decoding run.
+- [Data staging](docs/data-staging.md) describes the public NOD files to place
+  under `data/`.
+- [Benchmarking](docs/benchmarking.md) describes the initial NOD pilot.
+- [API overview](docs/api-overview.md) maps the main public modules.
+- [Examples](examples/README.md) lists executable examples.
+
+Build the documentation site locally with:
+
+```bash
+poetry install --with docs --without dev
+poetry run mkdocs build --strict
+```
+
+## Tests
+
+Run the test suite from a development environment:
+
+```bash
+python -m pytest
+```
+
+## Citation
+
+If you use **RepTrace** in your research, please cite the repository for now:
+
+```bibtex
+@software{pfaff_reptrace_2026,
+  author = {Florian Pfaff},
+  title = {RepTrace: Probabilistic Tracing of Neural Representations over Time},
+  year = {2026},
+  url = {https://github.com/IPS-Stuttgart/RepTrace},
+  license = {MIT}
+}
+```
+
+## License
+
+`RepTrace` is licensed under the MIT License.
