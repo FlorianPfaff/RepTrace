@@ -67,6 +67,23 @@ def _stream_frame() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _manual_event(stream_id: str, onset_time: float, stimulus_class: str, event_index: int) -> dict:
+    return {
+        "subject": "sub-01",
+        "stream_id": stream_id,
+        "decoder": "logistic",
+        "emission_mode": "calibrated",
+        "event_index": event_index,
+        "detected": True,
+        "stimulus_label": {"A": 0, "B": 1, "C": 2}[stimulus_class],
+        "stimulus_class": stimulus_class,
+        "onset_time": onset_time,
+        "offset_time": onset_time + 0.05,
+        "peak_time": onset_time,
+        "peak_score": 0.9,
+    }
+
+
 def test_detect_stimulus_events_returns_empty_when_no_stimulus_crosses_threshold():
     frame = pd.DataFrame(
         [
@@ -271,9 +288,89 @@ def test_annotation_matching_and_summary_report_event_level_metrics():
 
     assert matched["is_true_positive"].all()
     assert matched["matched_annotation_id"].tolist() == [1, 2, 3]
+    assert summary.iloc[0]["true_positives"] == 3
+    assert summary.iloc[0]["false_positives"] == 0
+    assert summary.iloc[0]["false_negatives"] == 0
     assert summary.iloc[0]["precision"] == 1.0
     assert summary.iloc[0]["recall"] == 1.0
     assert summary.iloc[0]["f1"] == 1.0
+    assert summary.iloc[0]["class_accuracy_for_matched_events"] == 1.0
+    assert summary.iloc[0]["onset_latency_mean"] == 0.0
+
+
+def test_summary_counts_duplicate_detections_and_false_alarms_per_minute():
+    events = pd.DataFrame(
+        [
+            _manual_event("run-1", 0.00, "A", 0),
+            _manual_event("run-1", 0.03, "A", 1),
+            _manual_event("run-1", 10.00, "B", 2),
+            _manual_event("run-1", 20.00, "A", 3),
+            _manual_event("run-1", 50.00, "A", 4),
+        ]
+    )
+    annotations = pd.DataFrame(
+        [
+            {"stream_id": "run-1", "annotation_id": 1, "stimulus_class": "A", "onset_time": 0.00},
+            {"stream_id": "run-1", "annotation_id": 2, "stimulus_class": "B", "onset_time": 10.00},
+            {"stream_id": "run-1", "annotation_id": 3, "stimulus_class": "A", "onset_time": 20.00},
+        ]
+    )
+    observations = pd.DataFrame(
+        [
+            {"stream_id": "run-1", "time": 0.0},
+            {"stream_id": "run-1", "time": 120.0},
+        ]
+    )
+
+    matched = match_stimulus_annotations(events, annotations, stream_columns=("stream_id",), match_tolerance=0.05)
+    summary = summarize_stimulus_events(
+        matched,
+        annotations=annotations,
+        observations=observations,
+        stream_columns=("stream_id",),
+    )
+
+    assert matched["is_true_positive"].tolist() == [True, False, True, True, False]
+    assert matched["is_duplicate_detection"].tolist() == [False, True, False, False, False]
+    assert summary.iloc[0]["n_annotations"] == 3
+    assert summary.iloc[0]["n_detections"] == 5
+    assert summary.iloc[0]["true_positives"] == 3
+    assert summary.iloc[0]["false_positives"] == 2
+    assert summary.iloc[0]["false_negatives"] == 0
+    assert summary.iloc[0]["duplicate_detections"] == 1
+    assert summary.iloc[0]["false_alarms_per_minute"] == 1.0
+    assert summary.iloc[0]["precision"] == 3 / 5
+    assert summary.iloc[0]["recall"] == 1.0
+    assert summary.iloc[0]["f1"] == 2 * (3 / 5) * 1.0 / ((3 / 5) + 1.0)
+
+
+def test_class_accuracy_for_matched_events_can_score_wrong_classes():
+    events = pd.DataFrame(
+        [
+            _manual_event("run-1", 0.0, "A", 0),
+            _manual_event("run-1", 1.0, "C", 1),
+            _manual_event("run-1", 2.0, "B", 2),
+        ]
+    )
+    annotations = pd.DataFrame(
+        [
+            {"stream_id": "run-1", "annotation_id": 1, "stimulus_class": "A", "onset_time": 0.0},
+            {"stream_id": "run-1", "annotation_id": 2, "stimulus_class": "B", "onset_time": 1.0},
+            {"stream_id": "run-1", "annotation_id": 3, "stimulus_class": "B", "onset_time": 2.0},
+        ]
+    )
+
+    matched = match_stimulus_annotations(
+        events,
+        annotations,
+        stream_columns=("stream_id",),
+        match_tolerance=0.01,
+        require_class_match=False,
+    )
+    summary = summarize_stimulus_events(matched, annotations=annotations)
+
+    assert matched["is_true_positive"].all()
+    assert summary.iloc[0]["class_accuracy_for_matched_events"] == 2 / 3
 
 
 def test_stimulus_detection_cli_writes_events_summary_and_thresholds(tmp_path, monkeypatch):
@@ -330,4 +427,6 @@ def test_stimulus_detection_cli_writes_events_summary_and_thresholds(tmp_path, m
     assert summary.iloc[0]["precision"] == 1.0
     assert summary.iloc[0]["recall"] == 1.0
     assert summary.iloc[0]["f1"] == 1.0
+    assert summary.iloc[0]["true_positives"] == 3
+    assert summary.iloc[0]["class_accuracy_for_matched_events"] == 1.0
     assert set(thresholds["stimulus_class"]) == {"A", "B", "C"}
