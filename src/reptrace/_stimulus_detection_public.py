@@ -493,7 +493,7 @@ def detect_stimulus_events_from_csvs(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Detect one or more stimulus events in long probability streams.")
     parser.add_argument("observation_csv", nargs="+", help="Observation CSVs or glob patterns with time and prob_class_* columns.")
-    parser.add_argument("--annotations-csv", type=Path)
+    parser.add_argument("--annotations", "--annotations-csv", dest="annotations_csv", type=Path)
     parser.add_argument("--thresholds-csv", type=Path)
     parser.add_argument("--threshold-window", nargs=2, type=float, default=DEFAULT_THRESHOLD_WINDOW, metavar=("START", "STOP"))
     parser.add_argument("--threshold-quantile", type=float, default=DEFAULT_THRESHOLD_QUANTILE)
@@ -543,6 +543,10 @@ def main() -> None:
     print(summary.to_string(index=False))
     if not events.empty:
         print(events.head().to_string(index=False))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
 
 
 __all__ = [
