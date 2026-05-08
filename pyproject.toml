@@ -3,7 +3,7 @@ name = "reptrace"
 description = "Probabilistic tracing of neural representations over time."
 readme = "README.md"
 authors = ["Florian Pfaff <pfaff@ias.uni-stuttgart.de>"]
-version = "0.1.0"
+version = "0.1.1"
 license = "MIT"
 packages = [{ include = "reptrace", from = "src" }]
 
