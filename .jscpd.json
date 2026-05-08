@@ -4,6 +4,7 @@
   "minTokens": 70,
   "ignore": [
     "**/.git/**",
+    "**/.github/workflows/**",
     "**/.pytest-tmp/**",
     "**/megalinter-reports/**"
   ]
