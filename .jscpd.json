@@ -1,0 +1,10 @@
+{
+  "threshold": 0,
+  "minLines": 40,
+  "minTokens": 70,
+  "ignore": [
+    "**/.git/**",
+    "**/.pytest-tmp/**",
+    "**/megalinter-reports/**"
+  ]
+}
