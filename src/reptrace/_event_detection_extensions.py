@@ -1,4 +1,4 @@
-"""Runtime extensions for onset run detection."""
+"""Compatibility installer for onset run detection helpers."""
 
 from __future__ import annotations
 
@@ -7,7 +7,17 @@ from reptrace._onset_detection_runs import first_detection_run as _select_first_
 
 
 def _install_onset_detection_extensions() -> None:
+    """Expose all-run onset helpers on :mod:`reptrace.onset_detection`.
+
+    ``reptrace.onset_detection`` remains the public detector module. This
+    installer is intentionally idempotent so importing :mod:`reptrace` repeatedly
+    never wraps or replaces an already-native implementation unnecessarily.
+    """
     from reptrace import onset_detection as onset
+
+    existing_all_runs = getattr(onset, "_detection_runs", None)
+    if existing_all_runs is not None and getattr(existing_all_runs, "__module__", "") == onset.__name__:
+        return
 
     def _detection_runs(
         candidates,
