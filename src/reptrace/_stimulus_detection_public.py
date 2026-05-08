@@ -193,6 +193,21 @@ def detect_stimulus_events(
     return _reindex_events(events, partition_columns=partition_columns)
 
 
+def _write_stimulus_csv_outputs(
+    *,
+    events: pd.DataFrame,
+    summary: pd.DataFrame,
+    thresholds: pd.DataFrame,
+    out_events: Path | None,
+    out_summary: Path | None,
+    out_thresholds: Path | None,
+) -> None:
+    for path, frame in ((out_events, events), (out_summary, summary), (out_thresholds, thresholds)):
+        if path is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            frame.to_csv(path, index=False)
+
+
 def detect_stimulus_events_from_csvs(
     observation_csvs: Sequence[str | Path],
     *,
@@ -216,11 +231,10 @@ def detect_stimulus_events_from_csvs(
     out_summary: Path | None = None,
     out_thresholds: Path | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    observations = read_stimulus_probability_observations(observation_csvs)
-    thresholds = pd.read_csv(thresholds_csv) if thresholds_csv is not None else None
-    events = detect_stimulus_events(
-        observations,
-        thresholds=thresholds,
+    events, _legacy_summary, thresholds = _legacy.detect_stimulus_events_from_csvs(
+        observation_csvs,
+        annotations_csv=None,
+        thresholds_csv=thresholds_csv,
         threshold_window=threshold_window,
         threshold_quantile=threshold_quantile,
         threshold_method=threshold_method,
@@ -233,29 +247,28 @@ def detect_stimulus_events_from_csvs(
         min_duration=min_duration,
         merge_gap=merge_gap,
         refractory=refractory,
-        conflict_resolution=conflict_resolution,
     )
-    if thresholds is None:
-        thresholds = fit_stimulus_detection_thresholds(
-            observations,
-            threshold_window=threshold_window,
-            threshold_quantile=threshold_quantile,
-            threshold_method=threshold_method,
-            score_mode=score_mode,
-            target_classes=target_classes,
-            group_columns=group_columns,
-            stream_columns=stream_columns,
-            min_consecutive=min_consecutive,
-            min_duration=min_duration,
-        )
+    if conflict_resolution not in CONFLICT_RESOLUTION_MODES:
+        raise ValueError(f"conflict_resolution must be one of {CONFLICT_RESOLUTION_MODES}.")
+    events["conflict_resolution"] = conflict_resolution
+    groups = _group_columns(events, group_columns) if not events.empty else list(group_columns or [])
+    streams = _stream_columns(events, stream_columns)
+    partition_columns = _unique_columns([*groups, *streams])
+    events = _resolve_event_conflicts(events, partition_columns=partition_columns, conflict_resolution=conflict_resolution)
+    events = _reindex_events(events, partition_columns=partition_columns)
+
     annotations = pd.read_csv(annotations_csv) if annotations_csv is not None else None
     if annotations is not None:
         events = match_stimulus_annotations(events, annotations, stream_columns=stream_columns, match_tolerance=match_tolerance)
     summary = summarize_stimulus_events(events, annotations=annotations, group_columns=group_columns)
-    for path, frame in ((out_events, events), (out_summary, summary), (out_thresholds, thresholds)):
-        if path is not None:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            frame.to_csv(path, index=False)
+    _write_stimulus_csv_outputs(
+        events=events,
+        summary=summary,
+        thresholds=thresholds,
+        out_events=out_events,
+        out_summary=out_summary,
+        out_thresholds=out_thresholds,
+    )
     return events, summary, thresholds
 
 
