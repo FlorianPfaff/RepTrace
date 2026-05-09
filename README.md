@@ -246,7 +246,7 @@ test before launching the full run. Resume is enabled by default; pass
 ## Documentation
 
 The documentation site is published at
-https://ips-stuttgart.github.io/RepTrace/.
+<https://ips-stuttgart.github.io/RepTrace/>.
 
 The `docs/` directory contains the project documentation:
 
