@@ -10,6 +10,10 @@ on:
         description: "Directory containing sub-*_epo.fif and sub-*_events.csv files"
         required: true
         default: "../data/nod"
+      data_remote_path:
+        description: "Optional path below the NODEEG WebDAV share root when data_root is absent"
+        required: false
+        default: ""
       output_dir:
         description: "Repository-relative output directory for derived results"
         required: true
@@ -31,6 +35,10 @@ jobs:
   nod-decoder-comparison:
     runs-on: [self-hosted, Windows]
     timeout-minutes: 720
+    env:
+      NODEEG_WEBDAV_URL: ${{ secrets.NODEEG_WEBDAV_URL }}
+      NODEEG_DATA_KEY: ${{ secrets.NODEEG_DATA_KEY }}
+      NODEEG_DATA_PASSWORD: ${{ secrets.NODEEG_DATA_PASSWORD }}
 
     steps:
       - name: Check out repository
@@ -46,24 +54,47 @@ jobs:
           py -${{ inputs.python_version }} -m poetry env use "%PYTHON_EXE%"
           py -${{ inputs.python_version }} -m poetry install
 
+      - name: Install rclone
+        if: env.NODEEG_WEBDAV_URL != ''
+        shell: pwsh
+        run: .github/scripts/install-rclone.ps1
+
       - name: Prepare run manifest
-        shell: cmd
+        shell: pwsh
         run: |
-          set "DATA_ROOT=${{ inputs.data_root }}"
-          if not exist "%DATA_ROOT%" if exist "%GITHUB_WORKSPACE%\%DATA_ROOT%" set "DATA_ROOT=%GITHUB_WORKSPACE%\%DATA_ROOT%"
-          if not exist "%DATA_ROOT%" (
-            echo Data root does not exist: %DATA_ROOT%
-            exit /b 1
-          )
-          set "OUTPUT_DIR=%GITHUB_WORKSPACE%\${{ inputs.output_dir }}"
-          set "RUN_MANIFEST=%OUTPUT_DIR%\manifest.csv"
-          mkdir "%OUTPUT_DIR%" 2>nul
-          py -${{ inputs.python_version }} -m poetry run python scripts\prepare_benchmark_manifest.py benchmarks\nod_animate_decoders_all.csv "%RUN_MANIFEST%" --data-root "%DATA_ROOT%"
-          echo REPTRACE_DATA_ROOT=%DATA_ROOT%>>"%GITHUB_ENV%"
-          echo REPTRACE_OUTPUT_DIR=%OUTPUT_DIR%>>"%GITHUB_ENV%"
-          echo REPTRACE_RUN_MANIFEST=%RUN_MANIFEST%>>"%GITHUB_ENV%"
-          echo Using data root: %DATA_ROOT%
-          echo Wrote run manifest: %RUN_MANIFEST%
+          $ErrorActionPreference = "Stop"
+          $requestedDataRoot = "${{ inputs.data_root }}"
+          $candidates = @($requestedDataRoot)
+          if (-not [System.IO.Path]::IsPathRooted($requestedDataRoot)) {
+            $candidates += (Join-Path $env:GITHUB_WORKSPACE $requestedDataRoot)
+          }
+          $dataRoot = $null
+          foreach ($candidate in $candidates) {
+            if ([string]::IsNullOrWhiteSpace($candidate)) {
+              continue
+            }
+            if ((Test-Path (Join-Path $candidate "sub-01_epo.fif")) -and (Test-Path (Join-Path $candidate "sub-01_events.csv"))) {
+              $dataRoot = (Resolve-Path $candidate).Path
+              break
+            }
+          }
+          if (-not $dataRoot) {
+            if ([string]::IsNullOrWhiteSpace($env:NODEEG_WEBDAV_URL) -or [string]::IsNullOrWhiteSpace($env:NODEEG_DATA_KEY) -or [string]::IsNullOrWhiteSpace($env:NODEEG_DATA_PASSWORD)) {
+              throw "No staged NOD-EEG data root found and NODEEG WebDAV secrets are not configured."
+            }
+            $dataRoot = Join-Path $env:GITHUB_WORKSPACE "data\nod"
+            & py "-${{ inputs.python_version }}" scripts\download_nodeeg_data.py --data-root $dataRoot --remote-path "${{ inputs.data_remote_path }}" --require-subject-count 19
+            $dataRoot = (Resolve-Path $dataRoot).Path
+          }
+          $outputDir = Join-Path $env:GITHUB_WORKSPACE "${{ inputs.output_dir }}"
+          $runManifest = Join-Path $outputDir "manifest.csv"
+          New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
+          & py "-${{ inputs.python_version }}" -m poetry run python scripts\prepare_benchmark_manifest.py benchmarks\nod_animate_decoders_all.csv $runManifest --data-root $dataRoot
+          "REPTRACE_DATA_ROOT=$dataRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "REPTRACE_OUTPUT_DIR=$outputDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "REPTRACE_RUN_MANIFEST=$runManifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "Using data root: $dataRoot"
+          "Wrote run manifest: $runManifest"
 
       - name: Validate staged data
         shell: cmd

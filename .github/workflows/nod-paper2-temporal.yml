@@ -10,6 +10,10 @@ on:
         description: "Directory containing sub-*_epo.fif and sub-*_events.csv files"
         required: true
         default: "../data/nod"
+      data_remote_path:
+        description: "Optional path below the NODEEG WebDAV share root when data_root is absent"
+        required: false
+        default: ""
       output_dir:
         description: "Repository-relative output directory for derived Paper 2 results"
         required: true
@@ -39,6 +43,10 @@ jobs:
   nod-paper2-temporal:
     runs-on: [self-hosted, Linux]
     timeout-minutes: 720
+    env:
+      NODEEG_WEBDAV_URL: ${{ secrets.NODEEG_WEBDAV_URL }}
+      NODEEG_DATA_KEY: ${{ secrets.NODEEG_DATA_KEY }}
+      NODEEG_DATA_PASSWORD: ${{ secrets.NODEEG_DATA_PASSWORD }}
 
     steps:
       - name: Check out repository
@@ -76,11 +84,15 @@ jobs:
             "$PYTHON_CMD" -m poetry install
           fi
 
-      - name: Run Paper 2 workflow
+      - name: Install rclone
+        if: env.NODEEG_WEBDAV_URL != ''
         shell: bash
-        env:
-          PYTHONPATH: ${{ github.workspace }}/src
+        run: .github/scripts/install-rclone.sh
+
+      - name: Resolve or download NOD-EEG data
+        shell: bash
         run: |
+          set -euo pipefail
           REQUESTED_DATA_ROOT="${{ inputs.data_root }}"
           CANDIDATES=(
             "$REQUESTED_DATA_ROOT"
@@ -101,8 +113,26 @@ jobs:
             fi
           done
           if [[ -z "$DATA_ROOT" ]]; then
-            echo "No staged NOD data root found. Checked:"
-            printf '  %s\n' "${CANDIDATES[@]}"
+            if [[ -z "${NODEEG_WEBDAV_URL:-}" || -z "${NODEEG_DATA_KEY:-}" || -z "${NODEEG_DATA_PASSWORD:-}" ]]; then
+              echo "No staged NOD-EEG data root found and NODEEG WebDAV secrets are not configured." >&2
+              printf 'Checked: %s\n' "${CANDIDATES[@]}" >&2
+              exit 1
+            fi
+            DATA_ROOT="$GITHUB_WORKSPACE/data/nod"
+            "$PAPER2_PYTHON_CMD" scripts/download_nodeeg_data.py --data-root "$DATA_ROOT" --remote-path "${{ inputs.data_remote_path }}" --require-subject-count 19
+            DATA_ROOT="$(cd "$DATA_ROOT" && pwd)"
+          fi
+          echo "REPTRACE_DATA_ROOT=$DATA_ROOT" >> "$GITHUB_ENV"
+          echo "Using data root: $DATA_ROOT"
+
+      - name: Run Paper 2 workflow
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          DATA_ROOT="${REPTRACE_DATA_ROOT:-}"
+          if [[ -z "$DATA_ROOT" || ! -f "$DATA_ROOT/sub-01_epo.fif" || ! -f "$DATA_ROOT/sub-01_events.csv" ]]; then
+            echo "REPTRACE_DATA_ROOT is not a valid staged NOD-EEG data root: $DATA_ROOT"
             exit 1
           fi
           echo "Using data root: $DATA_ROOT"
@@ -123,7 +153,7 @@ jobs:
           else
             POETRY_RUN=("$PAPER2_PYTHON_CMD" "-m" "poetry")
           fi
-          "${POETRY_RUN[@]}" run python -m reptrace.paper2_workflow "${WORKFLOW_ARGS[@]}"
+          "${POETRY_RUN[@]}" run python -m reptrace.temporal_state_workflow "${WORKFLOW_ARGS[@]}"
 
       - name: Upload compact Paper 2 artifacts
         uses: actions/upload-artifact@v6

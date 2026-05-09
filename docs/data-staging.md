@@ -123,6 +123,30 @@ epoch files are about 108 MB each.
 
 ## Alternative Download Methods
 
+For IPS-Stuttgart runners, the private staged NOD-EEG share can be copied with
+`rclone` over OwnCloud/WebDAV. The workflows use the repository secrets
+`NODEEG_WEBDAV_URL`, `NODEEG_DATA_KEY`, and `NODEEG_DATA_PASSWORD`; local runs can
+use the same environment variable names:
+
+```bash
+python scripts/download_nodeeg_data.py \
+  --data-root data/nod \
+  --require-subject-count 19
+```
+
+If the WebDAV share stores the staged files below a subdirectory, pass it with
+`--remote-path`, for example:
+
+```bash
+python scripts/download_nodeeg_data.py \
+  --data-root data/nod \
+  --remote-path staged/nod \
+  --require-subject-count 19
+```
+
+The downloader copies only the flat files expected by RepTrace:
+`sub-*_epo.fif` and `sub-*_events.csv`.
+
 OpenNeuro's browser download, the Deno OpenNeuro CLI, or DataLad/git-annex can
 also be used. The Deno CLI command downloads a dataset snapshot:
 

@@ -45,11 +45,32 @@ def _merge_close_runs(
             if previous_prediction != current_prediction:
                 merged.append(run)
                 continue
-        if current_start - previous_stop <= merge_gap:
+        if _gap_between_runs(previous, run, start=current_start, stop=previous_stop) <= merge_gap:
             merged[-1] = pd.concat([previous, run], ignore_index=False)
         else:
             merged.append(run)
     return merged
+
+
+def _gap_between_runs(previous: pd.DataFrame, run: pd.DataFrame, *, start: float, stop: float) -> float:
+    gap = start - stop
+    nominal_step = _nominal_time_step(previous, run)
+    if nominal_step is None:
+        return gap
+    return max(0.0, gap - nominal_step)
+
+
+def _nominal_time_step(*runs: pd.DataFrame) -> float | None:
+    steps: list[float] = []
+    for run in runs:
+        if "time" not in run.columns or len(run) < 2:
+            continue
+        times = run["time"].astype(float).sort_values()
+        diffs = times.diff().dropna()
+        steps.extend(float(diff) for diff in diffs if diff > 0)
+    if not steps:
+        return None
+    return float(pd.Series(steps).median())
 
 
 def detection_runs(
