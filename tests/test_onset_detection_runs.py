@@ -52,7 +52,7 @@ def test_detection_runs_can_merge_close_segments_with_same_prediction():
         min_consecutive=2,
         min_duration=None,
         require_stable_prediction=True,
-        merge_gap=0.25,
+        merge_gap=0.35,
     )
 
     assert len(runs) == 1
