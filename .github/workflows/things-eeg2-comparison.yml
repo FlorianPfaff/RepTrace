@@ -1,0 +1,272 @@
+name: THINGS-EEG2 comparison
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      data_root:
+        description: "Directory containing THINGS-EEG2 author-preprocessed arrays"
+        required: true
+        default: "../data/things_eeg2"
+      label_map_csv:
+        description: "CSV mapping image_condition to the supervised comparison label"
+        required: true
+        default: "../data/things_eeg2/things_eeg2_label_map.csv"
+      output_dir:
+        description: "Repository-relative output directory for derived results"
+        required: true
+        default: "results/things_eeg2_comparison"
+      subjects:
+        description: "Space-separated THINGS-EEG2 subjects, without or with sub- prefix"
+        required: true
+        default: "1 2 3 4 5 6 7 8 9 10"
+      partition:
+        description: "THINGS-EEG2 preprocessed partition to stage"
+        required: true
+        default: "test"
+        type: choice
+        options:
+          - test
+          - training
+      decoders:
+        description: "Space-separated RepTrace decoders"
+        required: true
+        default: "logistic lda linear_svm"
+      label_column:
+        description: "Metadata column name to create/use as the supervised label"
+        required: true
+        default: "condition"
+      label_map_key_column:
+        description: "Label-map column containing THINGS-EEG2 image condition IDs"
+        required: true
+        default: "image_condition"
+      label_map_label_column:
+        description: "Label-map column containing labels for RepTrace decoding"
+        required: true
+        default: "label"
+      label_map_partition_column:
+        description: "Optional label-map column distinguishing test/training partitions"
+        required: false
+        default: ""
+      group_column:
+        description: "CV grouping column; image_condition prevents image-repeat leakage for semantic labels"
+        required: true
+        default: "image_condition"
+      target_labels:
+        description: "Optional comma/space-separated label subset, e.g. animate,inanimate"
+        required: false
+        default: ""
+      max_conditions_per_label:
+        description: "Optional smoke-test cap on image conditions per label"
+        required: false
+        default: ""
+      max_repetitions:
+        description: "Optional cap on repetitions per image condition"
+        required: false
+        default: ""
+      chance:
+        description: "Chance level for reports and temporal inference"
+        required: true
+        default: "0.5"
+      n_splits:
+        description: "Grouped CV folds"
+        required: true
+        default: "5"
+      n_permutations:
+        description: "Sign-flip permutations for temporal inference and paired stats"
+        required: true
+        default: "10000"
+      tmin:
+        description: "Decode start time in seconds"
+        required: true
+        default: "-0.1"
+      tmax:
+        description: "Decode stop time in seconds"
+        required: true
+        default: "0.6"
+      window_ms:
+        description: "Time-window width in ms"
+        required: true
+        default: "20"
+      step_ms:
+        description: "Time-window step in ms"
+        required: true
+        default: "10"
+      python_version:
+        description: "Python version for the local py launcher"
+        required: true
+        default: "3.12"
+
+concurrency:
+  group: things-eeg2-comparison-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  things-eeg2-comparison:
+    runs-on: [self-hosted, Windows]
+    timeout-minutes: 720
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install dependencies
+        shell: cmd
+        run: |
+          py -${{ inputs.python_version }} --version
+          py -${{ inputs.python_version }} -m pip install --upgrade pip
+          py -${{ inputs.python_version }} -m pip install poetry
+          for /f "delims=" %%P in ('py -${{ inputs.python_version }} -c "import sys; print(sys.executable)"') do set "PYTHON_EXE=%%P"
+          py -${{ inputs.python_version }} -m poetry env use "%PYTHON_EXE%"
+          py -${{ inputs.python_version }} -m poetry install
+
+      - name: Stage THINGS-EEG2 data and write manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Resolve-DirectoryInput([string]$Value) {
+            $candidates = @($Value)
+            if (-not [System.IO.Path]::IsPathRooted($Value)) {
+              $candidates += (Join-Path $env:GITHUB_WORKSPACE $Value)
+            }
+            foreach ($candidate in $candidates) {
+              if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path $candidate)) {
+                return (Resolve-Path $candidate).Path
+              }
+            }
+            throw "Directory not found: $Value"
+          }
+
+          function Resolve-FileInput([string]$Value, [string]$DataRoot) {
+            $candidates = @($Value)
+            if (-not [System.IO.Path]::IsPathRooted($Value)) {
+              $candidates += (Join-Path $env:GITHUB_WORKSPACE $Value)
+              $candidates += (Join-Path $DataRoot $Value)
+              $candidates += (Join-Path $DataRoot ([System.IO.Path]::GetFileName($Value)))
+            }
+            foreach ($candidate in $candidates) {
+              if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path $candidate)) {
+                return (Resolve-Path $candidate).Path
+              }
+            }
+            throw "File not found: $Value"
+          }
+
+          $dataRoot = Resolve-DirectoryInput "${{ inputs.data_root }}"
+          $labelMap = Resolve-FileInput "${{ inputs.label_map_csv }}" $dataRoot
+          $outputDirInput = "${{ inputs.output_dir }}"
+          if ([System.IO.Path]::IsPathRooted($outputDirInput)) {
+            $outputDir = $outputDirInput
+          } else {
+            $outputDir = Join-Path $env:GITHUB_WORKSPACE $outputDirInput
+          }
+          $stagedDir = Join-Path $outputDir "staged"
+          $runManifest = Join-Path $outputDir "manifest.csv"
+          New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
+
+          $stageArgs = @(
+            "scripts\stage_things_eeg2_preprocessed.py",
+            "--things-root", $dataRoot,
+            "--staged-dir", $stagedDir,
+            "--manifest-out", $runManifest,
+            "--partition", "${{ inputs.partition }}",
+            "--label-map-csv", $labelMap,
+            "--label-map-key-column", "${{ inputs.label_map_key_column }}",
+            "--label-map-label-column", "${{ inputs.label_map_label_column }}",
+            "--label-column", "${{ inputs.label_column }}",
+            "--group-column", "${{ inputs.group_column }}",
+            "--tmin", "${{ inputs.tmin }}",
+            "--tmax", "${{ inputs.tmax }}",
+            "--window-ms", "${{ inputs.window_ms }}",
+            "--step-ms", "${{ inputs.step_ms }}",
+            "--n-splits", "${{ inputs.n_splits }}",
+            "--overwrite"
+          )
+
+          $partitionColumn = "${{ inputs.label_map_partition_column }}".Trim()
+          if (-not [string]::IsNullOrWhiteSpace($partitionColumn)) {
+            $stageArgs += @("--label-map-partition-column", $partitionColumn)
+          }
+          $targetLabels = "${{ inputs.target_labels }}".Trim()
+          if (-not [string]::IsNullOrWhiteSpace($targetLabels)) {
+            $stageArgs += "--target-labels"
+            $stageArgs += ($targetLabels -split '[,\s]+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+          }
+          $maxConditions = "${{ inputs.max_conditions_per_label }}".Trim()
+          if (-not [string]::IsNullOrWhiteSpace($maxConditions)) {
+            $stageArgs += @("--max-conditions-per-label", $maxConditions)
+          }
+          $maxRepetitions = "${{ inputs.max_repetitions }}".Trim()
+          if (-not [string]::IsNullOrWhiteSpace($maxRepetitions)) {
+            $stageArgs += @("--max-repetitions", $maxRepetitions)
+          }
+          $stageArgs += "--subjects"
+          $stageArgs += ("${{ inputs.subjects }}" -split '\s+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+          $stageArgs += "--decoders"
+          $stageArgs += ("${{ inputs.decoders }}" -split '\s+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+
+          & py "-${{ inputs.python_version }}" -m poetry run python @stageArgs
+
+          "REPTRACE_THINGS_ROOT=$dataRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "REPTRACE_LABEL_MAP=$labelMap" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "REPTRACE_OUTPUT_DIR=$outputDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "REPTRACE_RUN_MANIFEST=$runManifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "Using THINGS-EEG2 root: $dataRoot"
+          "Using label map: $labelMap"
+          "Wrote run manifest: $runManifest"
+
+      - name: Validate staged THINGS-EEG2 manifest
+        shell: cmd
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          py -${{ inputs.python_version }} -m poetry run python -m reptrace.validate_manifest "%REPTRACE_RUN_MANIFEST%" --report-out "%REPTRACE_OUTPUT_DIR%\validation.csv"
+
+      - name: Run THINGS-EEG2 decoder comparison
+        shell: cmd
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          py -${{ inputs.python_version }} -m poetry run python -m reptrace.benchmark "%REPTRACE_RUN_MANIFEST%" --out-dir "%REPTRACE_OUTPUT_DIR%" --aggregate-out "%REPTRACE_OUTPUT_DIR%\summary.csv" --plot-out "%REPTRACE_OUTPUT_DIR%\summary.png" --calibration-dir "%REPTRACE_OUTPUT_DIR%\calibration" --chance ${{ inputs.chance }} --resume
+
+      - name: Generate THINGS-EEG2 reports and inference tables
+        shell: pwsh
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+        run: |
+          $ErrorActionPreference = "Stop"
+          $decoders = "${{ inputs.decoders }}" -split '\s+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+          & py "-${{ inputs.python_version }}" -m poetry run python -m reptrace.report "$env:REPTRACE_OUTPUT_DIR\summary.csv" "$env:REPTRACE_OUTPUT_DIR\sub-*_time_decode.csv" --out "$env:REPTRACE_OUTPUT_DIR\report.md" --chance "${{ inputs.chance }}"
+          & py "-${{ inputs.python_version }}" -m poetry run python -m reptrace.calibration "$env:REPTRACE_OUTPUT_DIR\summary.csv" "$env:REPTRACE_OUTPUT_DIR\calibration\*_calibration_bins.csv" --out-report "$env:REPTRACE_OUTPUT_DIR\calibration_report.md" --out-bins "$env:REPTRACE_OUTPUT_DIR\reliability_bins.csv"
+          & py "-${{ inputs.python_version }}" -m poetry run python -m reptrace.plot_calibration "$env:REPTRACE_OUTPUT_DIR\reliability_bins.csv" --out "$env:REPTRACE_OUTPUT_DIR\reliability.png" --time-window 0.1 "${{ inputs.tmax }}" --title "THINGS-EEG2 decoder calibration"
+          if ($decoders.Count -gt 1) {
+            & py "-${{ inputs.python_version }}" -m poetry run python -m reptrace.paired_stats "$env:REPTRACE_OUTPUT_DIR\sub-*_time_decode.csv" --out-csv "$env:REPTRACE_OUTPUT_DIR\paired_stats.csv" --out-report "$env:REPTRACE_OUTPUT_DIR\paired_stats.md" --chance "${{ inputs.chance }}" --n-permutations "${{ inputs.n_permutations }}"
+          }
+          foreach ($decoder in $decoders) {
+            $decoderSafe = $decoder.ToLower().Replace("-", "_").Replace(" ", "_")
+            & py "-${{ inputs.python_version }}" -m poetry run python -m reptrace.inference "$env:REPTRACE_OUTPUT_DIR\sub-*_${decoderSafe}_time_decode.csv" --chance "${{ inputs.chance }}" --n-permutations "${{ inputs.n_permutations }}" --out-time "$env:REPTRACE_OUTPUT_DIR\inference_${decoderSafe}_time.csv" --out-clusters "$env:REPTRACE_OUTPUT_DIR\inference_${decoderSafe}_clusters.csv"
+          }
+
+      - name: Upload compact result artifacts
+        uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: things-eeg2-comparison-${{ github.run_id }}
+          path: |
+            ${{ inputs.output_dir }}/validation.csv
+            ${{ inputs.output_dir }}/manifest.csv
+            ${{ inputs.output_dir }}/summary.csv
+            ${{ inputs.output_dir }}/summary.png
+            ${{ inputs.output_dir }}/reliability.png
+            ${{ inputs.output_dir }}/report.md
+            ${{ inputs.output_dir }}/calibration_report.md
+            ${{ inputs.output_dir }}/paired_stats.csv
+            ${{ inputs.output_dir }}/paired_stats.md
+            ${{ inputs.output_dir }}/reliability_bins.csv
+            ${{ inputs.output_dir }}/inference_*_time.csv
+            ${{ inputs.output_dir }}/inference_*_clusters.csv
+            ${{ inputs.output_dir }}/staged/*_metadata.csv
+          if-no-files-found: warn
