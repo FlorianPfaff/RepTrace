@@ -63,29 +63,70 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $expectedSubjects = @(
+            "01", "02", "03", "04", "05", "06", "07", "08", "09",
+            "10", "11", "12", "13", "14", "24", "26", "27", "29", "30"
+          )
+
+          function Get-NodSubjectCount {
+            param([string]$Path)
+            if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path $Path)) {
+              return 0
+            }
+            $count = 0
+            foreach ($subject in $expectedSubjects) {
+              if ((Test-Path (Join-Path $Path "sub-$subject`_epo.fif")) -and (Test-Path (Join-Path $Path "sub-$subject`_events.csv"))) {
+                $count += 1
+              }
+            }
+            return $count
+          }
+
+          function Test-NodDataRoot {
+            param([string]$Path, [int]$RequiredSubjects = 19)
+            return ((Get-NodSubjectCount -Path $Path) -ge $RequiredSubjects)
+          }
+
+          $homeDir = if (-not [string]::IsNullOrWhiteSpace($env:HOME)) { $env:HOME } else { $env:USERPROFILE }
+          if ([string]::IsNullOrWhiteSpace($homeDir)) {
+            throw "Cannot resolve HOME or USERPROFILE for the persistent NOD-EEG cache."
+          }
+          $cacheRoot = Join-Path $homeDir "github-runner"
+          $cacheRoot = Join-Path $cacheRoot ".cache"
+          $cacheRoot = Join-Path $cacheRoot "datasets"
+          $cacheRoot = Join-Path $cacheRoot "reptrace"
+          $cacheRoot = Join-Path $cacheRoot "nod-eeg-full-v1"
+
           $requestedDataRoot = "${{ inputs.data_root }}"
           $candidates = @($requestedDataRoot)
           if (-not [System.IO.Path]::IsPathRooted($requestedDataRoot)) {
             $candidates += (Join-Path $env:GITHUB_WORKSPACE $requestedDataRoot)
           }
+          $candidates += $cacheRoot
+
           $dataRoot = $null
           foreach ($candidate in $candidates) {
             if ([string]::IsNullOrWhiteSpace($candidate)) {
               continue
             }
-            if ((Test-Path (Join-Path $candidate "sub-01_epo.fif")) -and (Test-Path (Join-Path $candidate "sub-01_events.csv"))) {
+            if (Test-NodDataRoot -Path $candidate -RequiredSubjects 19) {
               $dataRoot = (Resolve-Path $candidate).Path
               break
             }
           }
           if (-not $dataRoot) {
             if ([string]::IsNullOrWhiteSpace($env:NODEEG_WEBDAV_URL) -or [string]::IsNullOrWhiteSpace($env:NODEEG_DATA_KEY) -or [string]::IsNullOrWhiteSpace($env:NODEEG_DATA_PASSWORD)) {
-              throw "No staged NOD-EEG data root found and NODEEG WebDAV secrets are not configured."
+              throw "No valid staged NOD-EEG data root found and NODEEG WebDAV secrets are not configured. Checked: $($candidates -join ', ')"
             }
-            $dataRoot = Join-Path $env:GITHUB_WORKSPACE "data\nod"
-            & py "-${{ inputs.python_version }}" scripts\download_nodeeg_data.py --data-root $dataRoot --remote-path "${{ inputs.data_remote_path }}" --require-subject-count 19
-            $dataRoot = (Resolve-Path $dataRoot).Path
+            New-Item -ItemType Directory -Force -Path $cacheRoot | Out-Null
+            & py "-${{ inputs.python_version }}" scripts\download_nodeeg_data.py --data-root $cacheRoot --remote-path "${{ inputs.data_remote_path }}" --require-subject-count 19
+            $dataRoot = (Resolve-Path $cacheRoot).Path
+            Get-ChildItem -Path $dataRoot -Recurse -File |
+              Sort-Object FullName |
+              ForEach-Object { "$($_.Length) $($_.FullName)" } |
+              Set-Content -Path (Join-Path $dataRoot "MANIFEST.txt") -Encoding utf8
           }
+          $subjectCount = Get-NodSubjectCount -Path $dataRoot
           $outputDir = Join-Path $env:GITHUB_WORKSPACE "${{ inputs.output_dir }}"
           $runManifest = Join-Path $outputDir "manifest.csv"
           New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
@@ -94,6 +135,8 @@ jobs:
           "REPTRACE_OUTPUT_DIR=$outputDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "REPTRACE_RUN_MANIFEST=$runManifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "Using data root: $dataRoot"
+          "Valid staged NOD-EEG subject pairs: $subjectCount"
+          "Persistent NOD-EEG cache root: $cacheRoot"
           "Wrote run manifest: $runManifest"
 
       - name: Validate staged data
