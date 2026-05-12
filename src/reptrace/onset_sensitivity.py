@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from reptrace.onset_detection import DEFAULT_THRESHOLD_QUANTILE, DEFAULT_THRESHOLD_WINDOW, THRESHOLD_METHODS
+from reptrace.onset_detection import DEFAULT_DETECTION_WINDOW, DEFAULT_THRESHOLD_QUANTILE, DEFAULT_THRESHOLD_WINDOW, THRESHOLD_METHODS
 from reptrace.onset_workflow import DEFAULT_OBSERVATIONS_GLOB, _expand_task_dirs, run_onset_workflow
 
 
@@ -208,6 +208,7 @@ def run_onset_sensitivity(
     threshold_methods: list[str] | tuple[str, ...] = ("point",),
     threshold_quantiles: list[float] | tuple[float, ...] = (DEFAULT_THRESHOLD_QUANTILE,),
     detection_start: float | None = None,
+    detection_window: tuple[float, float] = DEFAULT_DETECTION_WINDOW,
     min_consecutive_values: list[int] | tuple[int, ...] = (1,),
     min_duration_values: list[float | None] | tuple[float | None, ...] | None = None,
     include_stable_prediction: bool = False,
@@ -241,6 +242,7 @@ def run_onset_sensitivity(
             threshold_quantile=setting.threshold_quantile,
             score_column=score_column,
             detection_start=detection_start,
+            detection_window=detection_window,
             min_consecutive=setting.min_consecutive,
             min_duration=setting.min_duration,
             require_stable_prediction=setting.require_stable_prediction,
@@ -291,6 +293,7 @@ def main() -> None:
     parser.add_argument("--threshold-quantiles", nargs="+", type=float, default=[0.90, 0.95, 0.975])
     parser.add_argument("--threshold-methods", nargs="+", choices=THRESHOLD_METHODS, default=["point"])
     parser.add_argument("--detection-start", type=float)
+    parser.add_argument("--detection-window", nargs=2, type=float, default=DEFAULT_DETECTION_WINDOW, metavar=("START", "STOP"))
     parser.add_argument("--min-consecutive-values", nargs="+", type=int, default=[1, 2, 3])
     parser.add_argument("--min-duration-values", nargs="*", type=float)
     parser.add_argument("--include-stable-prediction", action="store_true")
@@ -307,6 +310,7 @@ def main() -> None:
         threshold_methods=tuple(args.threshold_methods),
         threshold_quantiles=tuple(args.threshold_quantiles),
         detection_start=args.detection_start,
+        detection_window=tuple(args.detection_window),
         min_consecutive_values=tuple(args.min_consecutive_values),
         min_duration_values=_duration_values(args.min_duration_values),
         include_stable_prediction=args.include_stable_prediction,

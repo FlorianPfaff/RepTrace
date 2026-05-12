@@ -49,6 +49,16 @@ openneuro-py download \
 Source for the filtered download recipe:
 <https://mne.tools/mne-bids-pipeline/stable/examples/ds000117.html>
 
+For more subjects or runs, generate the exact one-file-per-command download
+list:
+
+```bash
+python scripts/print_ds000117_download_commands.py \
+  --subjects 01 02 03 \
+  --runs 01 02 \
+  --target-dir data/ds000117
+```
+
 ## Stage RepTrace Epochs
 
 Convert the downloaded BIDS-style FIF and events files into an MNE epochs file
@@ -88,24 +98,61 @@ reptrace-benchmark \
   --out-dir results/ds000117_faces_sub01 \
   --aggregate-out results/ds000117_faces_sub01_summary.csv \
   --plot-out results/ds000117_faces_sub01_summary.png \
+  --emission-mode both \
+  --calibration-dir results/ds000117_faces_sub01/calibration \
+  --observation-dir results/ds000117_faces_sub01/observations \
   --chance 0.5
 ```
 
-For onset detection, run the benchmark with probability observations enabled
-through the manifest workflow, then apply the same false-alarm-controlled
-settings that worked best in the PyMEGDec stress test:
+## Run Onset Detection
+
+For a post-stimulus latency benchmark, constrain detection to the expected
+post-stimulus window:
 
 ```bash
-reptrace-onset-detect \
-  results/ds000117_faces_sub01/observations/*_observations.csv \
-  --threshold-window -0.2 0.0 \
+python -m reptrace.onset_workflow \
+  --task-dir results/ds000117_faces_sub01 \
+  --threshold-window -0.190 -0.020 \
   --threshold-method max_run \
   --threshold-quantile 0.96 \
   --min-consecutive 2 \
   --min-duration 0.05 \
-  --out-events results/ds000117_faces_sub01_onset_events.csv \
-  --out-summary results/ds000117_faces_sub01_onset_summary.csv \
-  --out-threshold-summary results/ds000117_faces_sub01_onset_thresholds.csv
+  --score-column probability_true_class \
+  --detection-window 0.000 0.800 \
+  --out-dir results/ds000117_faces_sub01_onset_post \
+  --plot-out results/ds000117_faces_sub01_onset_post/onset_summary.png
+```
+
+For a false-alarm benchmark, allow the pre-stimulus interval to be scanned:
+
+```bash
+python -m reptrace.onset_workflow \
+  --task-dir results/ds000117_faces_sub01 \
+  --threshold-window -0.190 -0.020 \
+  --threshold-method max_run \
+  --threshold-quantile 0.96 \
+  --min-consecutive 2 \
+  --min-duration 0.05 \
+  --score-column probability_true_class \
+  --detection-window -0.200 0.800 \
+  --out-dir results/ds000117_faces_sub01_onset_fullscan \
+  --plot-out results/ds000117_faces_sub01_onset_fullscan/onset_summary.png
+```
+
+Then sweep operating points before making any onset claim:
+
+```bash
+python -m reptrace.onset_sensitivity \
+  --task-dir results/ds000117_faces_sub01 \
+  --threshold-window -0.190 -0.020 \
+  --threshold-methods max_run \
+  --threshold-quantiles 0.950 0.975 0.990 \
+  --min-consecutive-values 1 2 3 \
+  --min-duration-values 0.025 0.050 0.075 \
+  --score-column probability_true_class \
+  --detection-window -0.200 0.800 \
+  --out-dir results/ds000117_faces_sub01_onset_sensitivity \
+  --plot-out results/ds000117_faces_sub01_onset_sensitivity/onset_sensitivity.png
 ```
 
 ## Interpretation
