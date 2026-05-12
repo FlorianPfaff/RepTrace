@@ -7,42 +7,7 @@ from reptrace.onset_sensitivity import (
     run_onset_sensitivity,
     summarize_sensitivity,
 )
-
-
-def _write_observations(task_dir: Path, *, subject: str = "sub-01") -> Path:
-    observation_dir = task_dir / "observations"
-    observation_dir.mkdir(parents=True)
-    rows = []
-    for sequence_id in range(3):
-        true_label = sequence_id % 2
-        for time, confidence in [(-0.1, 0.55), (0.0, 0.56), (0.1, 0.91), (0.2, 0.90), (0.3, 0.89)]:
-            predicted_label = true_label if confidence > 0.8 else 1 - true_label
-            rows.append(
-                {
-                    "subject": subject,
-                    "fold": sequence_id % 2,
-                    "decoder": "logistic",
-                    "emission_mode": "calibrated",
-                    "time": time,
-                    "window_start": time - 0.01,
-                    "window_stop": time + 0.01,
-                    "sample_index": sequence_id,
-                    "sequence_id": sequence_id,
-                    "true_label": true_label,
-                    "true_class": f"class-{true_label}",
-                    "predicted_label": predicted_label,
-                    "predicted_class": f"class-{predicted_label}",
-                    "probability_true_class": confidence if predicted_label == true_label else 1.0 - confidence,
-                    "confidence": confidence,
-                    "class_0": "class-0",
-                    "class_1": "class-1",
-                    "prob_class_0": confidence if predicted_label == 0 else 1.0 - confidence,
-                    "prob_class_1": confidence if predicted_label == 1 else 1.0 - confidence,
-                }
-            )
-    path = observation_dir / f"{subject}_observations.csv"
-    pd.DataFrame(rows).to_csv(path, index=False)
-    return path
+from onset_test_helpers import FALSE_ALARM_TRACE, write_observations
 
 
 def test_build_sensitivity_settings_crosses_parameters():
@@ -99,8 +64,8 @@ def test_summarize_sensitivity_reports_latency_spread():
 def test_run_onset_sensitivity_writes_summaries_and_plot(tmp_path: Path):
     task_a = tmp_path / "nod_animate_all"
     task_b = tmp_path / "nod_canine_device_all"
-    _write_observations(task_a, subject="sub-01")
-    _write_observations(task_b, subject="sub-02")
+    write_observations(task_a, subject="sub-01")
+    write_observations(task_b, subject="sub-02")
 
     run = run_onset_sensitivity(
         [task_a, task_b],
@@ -128,9 +93,28 @@ def test_run_onset_sensitivity_writes_summaries_and_plot(tmp_path: Path):
     assert robustness["n_settings"].min() == 16
 
 
+def test_run_onset_sensitivity_passes_detection_window(tmp_path: Path):
+    task_dir = tmp_path / "ds000117_faces_sub01"
+    write_observations(task_dir, n_sequences=2, trace=FALSE_ALARM_TRACE[:-1])
+
+    run = run_onset_sensitivity(
+        [task_dir],
+        out_dir=tmp_path / "sensitivity",
+        threshold_window=(-0.2, -0.2),
+        threshold_quantiles=(0.5,),
+        detection_window=(-0.2, 0.2),
+        min_consecutive_values=(1,),
+    )
+
+    sensitivity = pd.read_csv(run.sensitivity_summary_csv)
+
+    assert sensitivity["false_alarm_count"].iloc[0] == 2
+    assert sensitivity["false_alarm_rate"].iloc[0] == 1.0
+
+
 def test_run_onset_sensitivity_allows_missing_tasks(tmp_path: Path):
     task_a = tmp_path / "nod_animate_all"
-    _write_observations(task_a)
+    write_observations(task_a)
 
     run = run_onset_sensitivity(
         [task_a, tmp_path / "missing_task"],
