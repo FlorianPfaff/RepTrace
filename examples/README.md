@@ -18,6 +18,13 @@ python -m reptrace.plot_time_decode \
   --out results/synthetic_decoding.png
 ```
 
+## Public datasets
+
+- [NOD](nod/README.md) covers the first natural-image semantic decoding
+  benchmarks.
+- [OpenNeuro ds000117](ds000117/README.md) stages a small face-vs-scrambled MEG
+  benchmark for cleaner onset-detection sanity checks.
+
 ## Stream stimulus detection
 
 After exporting probability observations with `prob_class_*` columns, detect
