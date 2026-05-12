@@ -22,16 +22,28 @@ by the MNE-BIDS-Pipeline example:
 python -m pip install openneuro-py
 
 openneuro-py download \
-  --dataset=ds000117 \
-  --include=sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-01_* \
-  --include=sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-02_* \
-  --include=sub-01/ses-meg/meg/sub-01_ses-meg_headshape.pos \
-  --include=sub-01/ses-meg/*.tsv \
-  --include=sub-01/ses-meg/*.json \
-  --include=sub-emptyroom/ses-20090409 \
-  --include=derivatives/meg_derivatives/ct_sparse.fif \
-  --include=derivatives/meg_derivatives/sss_cal.dat \
-  data/ds000117
+  --dataset ds000117 \
+  --tag 1.1.0 \
+  --target-dir data/ds000117 \
+  --include sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-01_meg.fif
+
+openneuro-py download \
+  --dataset ds000117 \
+  --tag 1.1.0 \
+  --target-dir data/ds000117 \
+  --include sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-01_events.tsv
+
+openneuro-py download \
+  --dataset ds000117 \
+  --tag 1.1.0 \
+  --target-dir data/ds000117 \
+  --include sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-02_meg.fif
+
+openneuro-py download \
+  --dataset ds000117 \
+  --tag 1.1.0 \
+  --target-dir data/ds000117 \
+  --include sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-02_events.tsv
 ```
 
 Source for the filtered download recipe:
@@ -49,11 +61,20 @@ python scripts/stage_ds000117_faces.py \
   --manifest-out benchmarks/ds000117_faces_sub01.csv \
   --subjects 01 \
   --runs 01 02 \
-  --max-events-per-label 40
+  --max-events-per-label 40 \
+  --decoders logistic \
+  --n-splits 2 \
+  --on-mismatch warn
 ```
 
 Omit `--max-events-per-label` for the full sub-01 run after the smoke test is
-working.
+working. The raw runs have different device-to-head transforms; the
+`--on-mismatch warn` option preserves the smoke-test path, while
+Maxwell-filtered derivatives are the better choice for a full multi-run
+analysis.
+
+Add `--decoders linear_svm` only for a separate calibration-aware comparison;
+on raw sub-01 smoke data it is substantially slower than logistic regression.
 
 ## Run Time-Resolved Decoding
 

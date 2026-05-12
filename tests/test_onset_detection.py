@@ -284,3 +284,19 @@ def test_detect_onsets_from_csvs_writes_outputs(tmp_path: Path):
     assert written["min_consecutive"].iloc[0] == 2
     assert written["threshold_method"].nunique() == 1
     assert written["threshold_method"].iloc[0] == "point"
+
+
+def test_detect_onsets_from_csvs_uses_detection_window_for_events(tmp_path: Path):
+    observations_path = tmp_path / "observations.csv"
+    _observation_frame().to_csv(observations_path, index=False)
+
+    events, _ = detect_onsets_from_csvs(
+        [observations_path],
+        threshold_window=(-0.20, -0.10),
+        threshold_quantile=0.875,
+        detection_window=(0.0, float("inf")),
+    )
+
+    assert events["detected_before_zero"].sum() == 0
+    detected = events.loc[events["detected"]]
+    assert detected["detection_time"].ge(0.0).all()

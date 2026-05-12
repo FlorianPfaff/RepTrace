@@ -834,6 +834,7 @@ def detect_onsets_from_csvs(
     """Read probability observations, detect onsets, and optionally write CSV outputs."""
 
     observations = read_probability_observations(observation_csvs)
+    event_detection_window = event_window if event_window is not None else detection_window
     thresholded_observations = annotate_threshold_crossings(
         observations,
         threshold_window=threshold_window,
@@ -851,7 +852,7 @@ def detect_onsets_from_csvs(
         score_column=score_column,
         threshold_method=threshold_method,
         detection_start=detection_start,
-        detection_window=event_window,
+        detection_window=event_detection_window,
         min_consecutive=min_consecutive,
         min_duration=min_duration,
         require_stable_prediction=require_stable_prediction,

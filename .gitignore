@@ -46,6 +46,7 @@ Thumbs.db
 .codex_*
 _reference_pyrecest/
 data/
+outputs/
 results/
 !src/reptrace/results/
 !src/reptrace/results/*.py
