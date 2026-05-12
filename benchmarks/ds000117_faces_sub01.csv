@@ -1,0 +1,2 @@
+subject,decoder,epochs,metadata_csv,label_column,group_column,tmin,tmax,window_ms,step_ms,n_splits,max_iter
+sub-01,logistic,../data/ds000117_faces_sub01_reptrace/sub-01_ds000117_faces_epo.fif,../data/ds000117_faces_sub01_reptrace/sub-01_ds000117_faces_metadata.csv,condition,run,-0.2,0.8,20.0,10.0,2,1000

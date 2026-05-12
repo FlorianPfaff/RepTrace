@@ -99,9 +99,13 @@ def test_write_manifest_repeats_rows_for_decoders(tmp_path: Path):
         window_ms=20.0,
         step_ms=10.0,
         n_splits=5,
+        max_iter=5000,
     )
 
     rows = pd.read_csv(manifest)
     assert rows["decoder"].tolist() == ["logistic", "lda"]
+    assert rows["epochs"].tolist() == ["sub-01_epo.fif", "sub-01_epo.fif"]
+    assert rows["metadata_csv"].tolist() == ["sub-01_metadata.csv", "sub-01_metadata.csv"]
     assert rows["label_column"].tolist() == ["condition", "condition"]
     assert rows["group_column"].tolist() == ["run", "run"]
+    assert rows["max_iter"].tolist() == [5000, 5000]

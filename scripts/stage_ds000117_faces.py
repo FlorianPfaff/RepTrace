@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -194,6 +195,7 @@ def stage_subject(
     face_conditions: Iterable[str],
     scrambled_conditions: Iterable[str],
     max_events_per_label: int | None = None,
+    on_mismatch: str = "raise",
     overwrite: bool = False,
 ) -> SubjectStageResult:
     subject = _normalise_subject(subject)
@@ -233,7 +235,11 @@ def stage_subject(
             )
         )
 
-    epochs = run_epochs[0] if len(run_epochs) == 1 else mne.concatenate_epochs(run_epochs, add_offset=True, verbose="error")
+    epochs = (
+        run_epochs[0]
+        if len(run_epochs) == 1
+        else mne.concatenate_epochs(run_epochs, add_offset=True, on_mismatch=on_mismatch, verbose="error")
+    )
     if epochs.metadata is None:
         raise ValueError(f"Staged epochs for {subject} do not contain metadata.")
     metadata = epochs.metadata.reset_index(drop=True)
@@ -255,9 +261,24 @@ def write_manifest(
     window_ms: float,
     step_ms: float,
     n_splits: int,
+    max_iter: int,
 ) -> None:
     manifest_out.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = ["subject", "decoder", "epochs", "metadata_csv", "label_column", "group_column", "tmin", "tmax", "window_ms", "step_ms", "n_splits"]
+    manifest_dir = manifest_out.parent
+    fieldnames = [
+        "subject",
+        "decoder",
+        "epochs",
+        "metadata_csv",
+        "label_column",
+        "group_column",
+        "tmin",
+        "tmax",
+        "window_ms",
+        "step_ms",
+        "n_splits",
+        "max_iter",
+    ]
     with manifest_out.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
@@ -267,8 +288,8 @@ def write_manifest(
                     {
                         "subject": result.subject,
                         "decoder": decoder,
-                        "epochs": str(result.epochs_path),
-                        "metadata_csv": str(result.metadata_path),
+                        "epochs": _path_for_manifest(result.epochs_path, manifest_dir),
+                        "metadata_csv": _path_for_manifest(result.metadata_path, manifest_dir),
                         "label_column": label_column,
                         "group_column": group_column,
                         "tmin": tmin,
@@ -276,6 +297,7 @@ def write_manifest(
                         "window_ms": window_ms,
                         "step_ms": step_ms,
                         "n_splits": n_splits,
+                        "max_iter": max_iter,
                     }
                 )
 
@@ -287,6 +309,15 @@ def _baseline(value: str) -> tuple[float | None, float | None] | None:
     return (None if start.lower() == "none" else float(start), None if stop.lower() == "none" else float(stop))
 
 
+def _path_for_manifest(path: Path, manifest_dir: Path) -> str:
+    resolved_path = path if path.is_absolute() else path.resolve()
+    resolved_base = manifest_dir if manifest_dir.is_absolute() else manifest_dir.resolve()
+    try:
+        return Path(os.path.relpath(resolved_path, start=resolved_base)).as_posix()
+    except ValueError:
+        return resolved_path.as_posix()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bids-root", type=Path, required=True)
@@ -296,7 +327,7 @@ def main() -> None:
     parser.add_argument("--session", default="meg")
     parser.add_argument("--task", default="facerecognition")
     parser.add_argument("--runs", nargs="+", default=["01", "02"])
-    parser.add_argument("--condition-column", default="trial_type")
+    parser.add_argument("--condition-column", default="stim_type")
     parser.add_argument("--face-conditions", nargs="+", default=list(DEFAULT_FACE_CONDITIONS))
     parser.add_argument("--scrambled-conditions", nargs="+", default=list(DEFAULT_SCRAMBLED_CONDITIONS))
     parser.add_argument("--picks", default="meg")
@@ -308,6 +339,9 @@ def main() -> None:
     parser.add_argument("--window-ms", type=float, default=20.0)
     parser.add_argument("--step-ms", type=float, default=10.0)
     parser.add_argument("--n-splits", type=int, default=5)
+    parser.add_argument("--max-iter", type=int, default=1000)
+    parser.add_argument("--group-column", default="run")
+    parser.add_argument("--on-mismatch", choices=["raise", "warn", "ignore"], default="raise")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
@@ -331,6 +365,7 @@ def main() -> None:
             face_conditions=face_conditions,
             scrambled_conditions=scrambled_conditions,
             max_events_per_label=args.max_events_per_label,
+            on_mismatch=args.on_mismatch,
             overwrite=args.overwrite,
         )
         staged_results.append(result)
@@ -341,12 +376,13 @@ def main() -> None:
         args.manifest_out,
         decoders=args.decoders,
         label_column="condition",
-        group_column="run",
+        group_column=args.group_column,
         tmin=args.tmin,
         tmax=args.tmax,
         window_ms=args.window_ms,
         step_ms=args.step_ms,
         n_splits=args.n_splits,
+        max_iter=args.max_iter,
     )
     print(f"Wrote ds000117 RepTrace manifest: {args.manifest_out}")
 
