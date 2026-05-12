@@ -10,6 +10,7 @@ packages = [{ include = "reptrace", from = "src" }]
 [tool.poetry.scripts]
 reptrace = "reptrace.cli:main"
 reptrace-benchmark = "reptrace.benchmark:main"
+reptrace-continuous-stimulus-scan = "reptrace.continuous_stimulus_scan:main"
 reptrace-event-detect = "reptrace.event_detection:main"
 reptrace-metadata = "reptrace.metadata:main"
 reptrace-mne-time-decode = "reptrace.mne_time_decode:main"

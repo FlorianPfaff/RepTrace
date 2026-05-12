@@ -13,6 +13,7 @@ nav:
   - Reference:
       - Benchmark: reference/benchmark.md
       - Calibration: reference/calibration.md
+      - Continuous Stimulus Scan: reference/continuous-stimulus-scan.md
       - Decoding: reference/decoding.md
       - Emission Compare: reference/emission-compare.md
       - Inference: reference/inference.md

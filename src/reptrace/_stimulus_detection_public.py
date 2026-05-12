@@ -201,14 +201,14 @@ def _annotation_value(annotation: pd.Series, *columns: str, default: object = np
 
 def _add_annotation_candidate_columns(events: pd.DataFrame) -> pd.DataFrame:
     events = events.copy()
-    events["matched_annotation_id"] = np.nan
+    events["matched_annotation_id"] = pd.Series(pd.NA, index=events.index, dtype="object")
     events["matched_annotation_onset_time"] = np.nan
-    events["matched_annotation_class"] = ""
-    events["matched_annotation_label"] = np.nan
-    events["candidate_annotation_id"] = np.nan
+    events["matched_annotation_class"] = pd.Series("", index=events.index, dtype="object")
+    events["matched_annotation_label"] = pd.Series(pd.NA, index=events.index, dtype="object")
+    events["candidate_annotation_id"] = pd.Series(pd.NA, index=events.index, dtype="object")
     events["candidate_annotation_onset_time"] = np.nan
-    events["candidate_annotation_class"] = ""
-    events["candidate_annotation_label"] = np.nan
+    events["candidate_annotation_class"] = pd.Series("", index=events.index, dtype="object")
+    events["candidate_annotation_label"] = pd.Series(pd.NA, index=events.index, dtype="object")
     events["candidate_latency"] = np.nan
     events["latency"] = np.nan
     events["is_true_positive"] = False
