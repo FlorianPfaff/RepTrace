@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Protocol
+
 import numpy as np
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
@@ -9,8 +13,160 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
 
+from reptrace.observations import ProbabilityObservationTable
+
 DECODER_CHOICES = ("logistic", "lda", "linear_svm")
 EMISSION_MODE_CHOICES = ("calibrated", "uncalibrated")
+
+
+@dataclass(frozen=True)
+class DecoderFitResult:
+    """Held-out predictions emitted by a decoder backend for one split/window."""
+
+    probabilities: np.ndarray
+    predictions: np.ndarray
+    test_labels: np.ndarray
+    backend: str
+    decoder: str
+    emission_mode: str
+
+
+class DecoderBackend(Protocol):
+    """Common interface for decoder families that emit probability observations."""
+
+    name: str
+    decoder: str
+    emission_mode: str
+
+    def fit_predict(
+        self,
+        features: np.ndarray,
+        labels: np.ndarray,
+        train_idx: np.ndarray,
+        test_idx: np.ndarray,
+    ) -> DecoderFitResult:
+        """Fit on ``train_idx`` and return held-out probabilities for ``test_idx``."""
+        ...
+
+    def fit_predict_observation_table(
+        self,
+        features: np.ndarray,
+        labels: np.ndarray,
+        train_idx: np.ndarray,
+        test_idx: np.ndarray,
+        *,
+        class_names: Sequence[object],
+        fold: int,
+        split_id: str,
+        seed: int | None,
+        train_time: float | None,
+        test_time: float,
+        original_indices: Sequence[int] | np.ndarray | None = None,
+        subject: str | None = None,
+        session_values: Sequence[object] | np.ndarray | None = None,
+        group_values: Sequence[object] | np.ndarray | None = None,
+        window_start: float | None = None,
+        window_stop: float | None = None,
+        calibration_fold: str | int | None = None,
+        preprocessing_hash: str | None = None,
+        model_hash: str | None = None,
+    ) -> ProbabilityObservationTable:
+        """Fit and return a canonical held-out probability-observation table."""
+        ...
+
+
+@dataclass(frozen=True)
+class SklearnDecoderBackend:
+    """Scikit-learn decoder backend for RepTrace probability observations."""
+
+    decoder: str = "logistic"
+    max_iter: int = 1000
+    emission_mode: str = "calibrated"
+    name: str = "sklearn"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "decoder", normalize_decoder_name(self.decoder))
+        object.__setattr__(self, "emission_mode", normalize_emission_mode(self.emission_mode))
+
+    def fit_predict(
+        self,
+        features: np.ndarray,
+        labels: np.ndarray,
+        train_idx: np.ndarray,
+        test_idx: np.ndarray,
+    ) -> DecoderFitResult:
+        """Fit the configured sklearn decoder and return held-out probabilities."""
+        model = make_decoder(self.decoder, max_iter=self.max_iter, emission_mode=self.emission_mode)
+        model.fit(features[train_idx], labels[train_idx])
+        probabilities = predict_emission_probabilities(model, features[test_idx], emission_mode=self.emission_mode)
+        return DecoderFitResult(
+            probabilities=probabilities,
+            predictions=probabilities.argmax(axis=1),
+            test_labels=labels[test_idx],
+            backend=self.name,
+            decoder=self.decoder,
+            emission_mode=self.emission_mode,
+        )
+
+    def fit_predict_observation_table(
+        self,
+        features: np.ndarray,
+        labels: np.ndarray,
+        train_idx: np.ndarray,
+        test_idx: np.ndarray,
+        *,
+        class_names: Sequence[object],
+        fold: int,
+        split_id: str,
+        seed: int | None,
+        train_time: float | None,
+        test_time: float,
+        original_indices: Sequence[int] | np.ndarray | None = None,
+        subject: str | None = None,
+        session_values: Sequence[object] | np.ndarray | None = None,
+        group_values: Sequence[object] | np.ndarray | None = None,
+        window_start: float | None = None,
+        window_stop: float | None = None,
+        calibration_fold: str | int | None = None,
+        preprocessing_hash: str | None = None,
+        model_hash: str | None = None,
+    ) -> ProbabilityObservationTable:
+        """Fit and return a canonical held-out probability-observation table."""
+        result = self.fit_predict(features, labels, train_idx, test_idx)
+        return ProbabilityObservationTable.from_decoded_fold(
+            probabilities=result.probabilities,
+            test_labels=result.test_labels,
+            predictions=result.predictions,
+            class_names=class_names,
+            test_indices=test_idx,
+            original_indices=original_indices,
+            subject=subject,
+            session_values=session_values,
+            group_values=group_values,
+            fold=fold,
+            split_id=split_id,
+            seed=seed,
+            decoder=result.decoder,
+            backend=result.backend,
+            emission_mode=result.emission_mode,
+            train_time=train_time,
+            test_time=test_time,
+            window_start=window_start,
+            window_stop=window_stop,
+            calibration_fold=calibration_fold,
+            preprocessing_hash=preprocessing_hash,
+            model_hash=model_hash,
+        )
+
+
+def make_decoder_backend(name: str = "logistic", *, max_iter: int = 1000, emission_mode: str = "calibrated") -> DecoderBackend:
+    """Create the default decoder backend for a decoder name.
+
+    This keeps the public factory backend-oriented without changing existing
+    decoder names. Future backends can be selected by expanding this factory or
+    by accepting explicit backend objects in workflow functions.
+    """
+    return SklearnDecoderBackend(decoder=name, max_iter=max_iter, emission_mode=emission_mode)
 
 
 def make_logistic_decoder(max_iter: int = 1000):
@@ -98,7 +254,7 @@ def predict_emission_probabilities(model, features: np.ndarray, *, emission_mode
     raise ValueError("Decoder does not provide predict_proba or decision_function.")
 
 
-def make_cross_validator(labels: np.ndarray, groups: np.ndarray | None, n_splits: int):
+def make_cross_validator(labels: np.ndarray, groups: np.ndarray | None, n_splits: int, *, random_state: int | None = 13):
     """Create stratified CV splits, optionally preserving group boundaries."""
     _, class_counts = np.unique(labels, return_counts=True)
     if len(class_counts) < 2:
@@ -113,12 +269,12 @@ def make_cross_validator(labels: np.ndarray, groups: np.ndarray | None, n_splits
             raise ValueError(
                 f"Need at least {n_splits} groups for grouped CV, found {len(unique_groups)}."
             )
-        return StratifiedGroupKFold(n_splits=n_splits).split(
+        return StratifiedGroupKFold(n_splits=n_splits, shuffle=random_state is not None, random_state=random_state).split(
             np.zeros_like(labels),
             labels,
             groups,
         )
-    return StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=13).split(
+    return StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state).split(
         np.zeros_like(labels),
         labels,
     )
