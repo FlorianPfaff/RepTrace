@@ -13,3 +13,9 @@ python -m reptrace.plot_time_decode \
   --chance 0.5 \
   --out results/synthetic_decoding.png
 ```
+
+Public dataset examples:
+
+- `examples/nod/README.md` describes the staged NOD natural-image benchmarks.
+- `examples/ds000117/README.md` describes a small OpenNeuro `ds000117`
+  face-vs-scrambled MEG benchmark for onset-detection sanity checks.
