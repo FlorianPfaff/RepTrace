@@ -9,6 +9,7 @@ from importlib import import_module
 
 COMMAND_MODULES = {
     "benchmark": "reptrace.benchmark",
+    "continuous-stimulus-scan": "reptrace.continuous_stimulus_scan",
     "event-detect": "reptrace.event_detection",
     "event-detection": "reptrace.event_detection",
     "metadata": "reptrace.metadata",

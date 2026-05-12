@@ -21,6 +21,9 @@ RepTrace currently provides tools for:
   thresholds, false-alarm rates, and detection latencies;
 - stream-level stimulus event detection for long probability traces with zero,
   one, or many stimulus occurrences;
+- continuous stimulus-scanning workflows that train an event-locked decoder on
+  one raw run, scan a held-out raw stream, export `P(class | time)`, and score
+  detected events against held-out annotations;
 - conservative sticky switching models for probability traces with shuffled
   time, shuffled label, and baseline-window controls;
 - category-conditioned semantic stage summaries for asking whether decoded
@@ -68,7 +71,8 @@ python -m pip install -e .
 
 Installed environments expose both a grouped `reptrace` command and focused
 workflow commands such as `reptrace-benchmark`, `reptrace-mne-time-decode`,
-`reptrace-onset-detect`, `reptrace-stimulus-detect`, and
+`reptrace-onset-detect`, `reptrace-continuous-stimulus-scan`,
+`reptrace-stimulus-detect`, and
 `reptrace-temporal-model`. The equivalent `python -m reptrace.<module>` forms
 remain available for source-checkout debugging.
 
@@ -185,6 +189,44 @@ reptrace-stimulus-detect \
 This stream-oriented detector returns one row per detected event, including the
 stimulus class, onset, offset, peak, confirmed detection time, and optional
 annotation match.
+
+Train an event-locked decoder on one raw run and scan a held-out raw run for
+face-like events:
+
+```bash
+reptrace-continuous-stimulus-scan \
+  --train-raw data/ds000117/sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-01_meg.fif \
+  --train-events data/ds000117/sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-01_events.tsv \
+  --scan-raw data/ds000117/sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-02_meg.fif \
+  --scan-events data/ds000117/sub-01/ses-meg/meg/sub-01_ses-meg_task-facerecognition_run-02_events.tsv \
+  --source-column stim_type \
+  --positive-pattern "Famous|Unfamiliar" \
+  --negative-pattern "Scrambled" \
+  --positive-label face \
+  --negative-label scrambled \
+  --target-class face \
+  --train-window 0.15 0.25 \
+  --picks meg \
+  --demean-window \
+  --slice-duration 6.0 \
+  --slice-count 10 \
+  --require-target-event \
+  --exclude-events-from-threshold-window \
+  --threshold-window 0.0 0.8 \
+  --detection-window 0.8 6.0 \
+  --threshold-method max_run \
+  --threshold-quantile 0.975 \
+  --min-consecutive 2 \
+  --min-duration 0.05 \
+  --merge-gap 0.05 \
+  --refractory 0.30 \
+  --match-tolerance 0.35 \
+  --out-dir results/ds000117_continuous_scan
+```
+
+The workflow writes `stream_observations.csv`, `stimulus_events.csv`,
+`stimulus_summary.csv`, `stimulus_thresholds.csv`, `stimulus_annotations.csv`,
+and `heldout_event_metrics.csv`.
 
 If the events CSV has the NOD `stim_is_animate` column but no named decoding
 condition yet, create one:
