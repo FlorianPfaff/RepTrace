@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
@@ -15,9 +16,12 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
 DEFAULT_CLASSIFIER_PARAMS = {
+    "correlation-prototype": None,
     "lasso": 0.005,
+    "multinomial-logistic": 1.0,
     "multiclass-svm": 0.5,
     "multiclass-svm-weighted": 0.5,
+    "shrinkage-lda": None,
     "svm-binary": 0.5,
     "binary-svm": 0.5,
     "random-forest": 100,
@@ -95,6 +99,74 @@ def _build_knn(_features: np.ndarray, _labels: np.ndarray, classifier_param: Any
     return KNeighborsClassifier(n_neighbors=int(classifier_param))
 
 
+class CorrelationPrototypeClassifier:
+    """Classify rows by correlation to class-average feature prototypes."""
+
+    def __init__(self):
+        self.classes_: np.ndarray | None = None
+        self.prototypes_: np.ndarray | None = None
+        self.normalized_prototypes_: np.ndarray | None = None
+
+    def fit(self, features: Sequence[Sequence[float]] | np.ndarray, labels: Sequence | np.ndarray):
+        features = np.asarray(features, dtype=float)
+        labels = np.asarray(labels).ravel()
+        self.classes_ = np.unique(labels)
+        if self.classes_.size == 0:
+            raise ValueError("At least one class is required.")
+        self.prototypes_ = np.vstack([np.mean(features[labels == class_label], axis=0) for class_label in self.classes_])
+        self.normalized_prototypes_ = self._row_center_normalize(self.prototypes_)
+        return self
+
+    def decision_function(self, features: Sequence[Sequence[float]] | np.ndarray) -> np.ndarray:
+        if self.normalized_prototypes_ is None:
+            raise RuntimeError("CorrelationPrototypeClassifier must be fitted before scoring.")
+        features = np.asarray(features, dtype=float)
+        return self._row_center_normalize(features) @ self.normalized_prototypes_.T
+
+    def predict(self, features: Sequence[Sequence[float]] | np.ndarray) -> np.ndarray:
+        if self.classes_ is None:
+            raise RuntimeError("CorrelationPrototypeClassifier must be fitted before prediction.")
+        scores = self.decision_function(features)
+        return self.classes_[np.argmax(scores, axis=1)]
+
+    @staticmethod
+    def _row_center_normalize(values: Sequence[Sequence[float]] | np.ndarray) -> np.ndarray:
+        values = np.asarray(values, dtype=float)
+        centered = values - np.mean(values, axis=1, keepdims=True)
+        norms = np.linalg.norm(centered, axis=1, keepdims=True)
+        norms = np.where(norms < 1e-12, 1.0, norms)
+        return centered / norms
+
+
+def _build_correlation_prototype(_features: np.ndarray, _labels: np.ndarray, _classifier_param: Any, _random_state: int | None):
+    return CorrelationPrototypeClassifier()
+
+
+def _build_multinomial_logistic(_features: np.ndarray, _labels: np.ndarray, classifier_param: Any, random_state: int | None):
+    return LogisticRegression(
+        C=float(classifier_param),
+        max_iter=1000,
+        random_state=random_state,
+    )
+
+
+def _build_shrinkage_lda(_features: np.ndarray, _labels: np.ndarray, classifier_param: Any, _random_state: int | None):
+    return LinearDiscriminantAnalysis(solver="lsqr", shrinkage=_normalize_lda_shrinkage(classifier_param))
+
+
+def _normalize_lda_shrinkage(classifier_param: Any):
+    if classifier_param is None:
+        return "auto"
+    if isinstance(classifier_param, str):
+        normalized = classifier_param.strip().lower()
+        if normalized == "auto":
+            return "auto"
+    shrinkage = float(classifier_param)
+    if not 0.0 <= shrinkage <= 1.0:
+        raise ValueError("shrinkage-lda classifier_param must be 'auto' or a numeric shrinkage in [0, 1].")
+    return shrinkage
+
+
 def _build_most_frequent_dummy(_features: np.ndarray, _labels: np.ndarray, _classifier_param: Any, _random_state: int | None):
     return DummyClassifier(strategy="most_frequent")
 
@@ -112,6 +184,8 @@ def _build_scikit_mlp(_features: np.ndarray, _labels: np.ndarray, classifier_par
 
 
 CLASSIFIER_REGISTRY = {
+    "correlation-prototype": ClassifierSpec(_build_correlation_prototype),
+    "multinomial-logistic": ClassifierSpec(_build_multinomial_logistic),
     "multiclass-svm": ClassifierSpec(_build_multiclass_svm),
     "multiclass-svm-weighted": ClassifierSpec(_build_multiclass_svm_weighted),
     "random-forest": ClassifierSpec(_build_random_forest),
@@ -120,6 +194,7 @@ CLASSIFIER_REGISTRY = {
     "mostFrequentDummy": ClassifierSpec(_build_most_frequent_dummy),
     "always1Dummy": ClassifierSpec(_build_always_one_dummy),
     "scikit-mlp": ClassifierSpec(_build_scikit_mlp),
+    "shrinkage-lda": ClassifierSpec(_build_shrinkage_lda),
 }
 
 

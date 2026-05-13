@@ -2,17 +2,40 @@ from __future__ import annotations
 
 import numpy as np
 
-from reptrace.metrics.confusion import confusion_counts, per_class_accuracy
+from reptrace.metrics.classification import (
+    exact_one_sided_sign_p_value,
+    one_sided_signflip_p_value,
+    ranked_accuracy_metrics,
+    subject_level_signflip_summary,
+    true_label_ranks,
+)
+from reptrace.metrics.confusion import (
+    category_confusion_enrichment,
+    category_confusion_matrix,
+    confusion_counts,
+    confusion_pair_summary,
+    most_confused_class_pairs,
+    per_class_accuracy,
+)
 from reptrace.metrics.prepost import compare_prepost_windows, summarize_window_metric
 
 __all__ = [
     "brier_score_multiclass",
+    "category_confusion_enrichment",
+    "category_confusion_matrix",
     "compare_prepost_windows",
     "confusion_counts",
+    "confusion_pair_summary",
+    "exact_one_sided_sign_p_value",
     "expected_calibration_error",
+    "most_confused_class_pairs",
+    "one_sided_signflip_p_value",
     "per_class_accuracy",
+    "ranked_accuracy_metrics",
     "reliability_bins",
+    "subject_level_signflip_summary",
     "summarize_window_metric",
+    "true_label_ranks",
 ]
 
 

@@ -33,30 +33,36 @@ def multiclass_data():
     return features, labels
 
 
-def test_registry_contains_shared_sklearn_classifiers():
+def test_registry_contains_shared_classifiers():
     assert set(CLASSIFIER_REGISTRY) == {
         "always1Dummy",
+        "correlation-prototype",
         "gradient-boosting",
         "knn",
         "mostFrequentDummy",
+        "multinomial-logistic",
         "multiclass-svm",
         "multiclass-svm-weighted",
         "random-forest",
         "scikit-mlp",
+        "shrinkage-lda",
     }
 
 
-def test_registry_trains_fast_sklearn_classifiers(multiclass_data):
+def test_registry_trains_fast_classifiers(multiclass_data):
     features, labels = multiclass_data
     classifier_params = {
         "always1Dummy": None,
+        "correlation-prototype": None,
         "gradient-boosting": 5,
         "knn": 1,
         "mostFrequentDummy": None,
+        "multinomial-logistic": 1.0,
         "multiclass-svm": 1.0,
         "multiclass-svm-weighted": 1.0,
         "random-forest": 5,
         "scikit-mlp": (5, 50),
+        "shrinkage-lda": None,
     }
 
     with warnings.catch_warnings():
@@ -76,7 +82,10 @@ def test_random_state_reproduces_stochastic_classifier_predictions(multiclass_da
 
 
 def test_default_classifier_params_include_legacy_binary_helpers():
+    assert get_default_classifier_param("correlation-prototype") is None
     assert get_default_classifier_param("multiclass-svm") == 0.5
+    assert get_default_classifier_param("multinomial-logistic") == 1.0
+    assert get_default_classifier_param("shrinkage-lda") is None
     assert get_default_classifier_param("svm-binary") == 0.5
     assert get_default_classifier_param("binary-svm") == 0.5
     assert get_default_classifier_param("lasso") == 0.005
@@ -98,6 +107,38 @@ def test_binary_helper_trainers_fit_binary_labels():
     for build_model in helpers:
         model = build_model()
         assert len(model.predict(features)) == len(labels)
+
+
+def test_correlation_prototype_predicts_by_nearest_class_pattern():
+    features = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [1.0, 0.1, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.1],
+            [0.0, 0.0, 1.0],
+            [0.1, 0.0, 1.0],
+        ]
+    )
+    labels = np.array([0, 0, 1, 1, 2, 2])
+    model = train_classifier(features, labels, "correlation-prototype", None)
+
+    predictions = model.predict(np.array([[0.9, 0.1, 0.0], [0.0, 0.2, 1.0]]))
+
+    np.testing.assert_array_equal(predictions, np.array([0, 2]))
+
+
+def test_shrinkage_lda_accepts_auto_and_numeric_shrinkage(multiclass_data):
+    features, labels = multiclass_data
+    for classifier_param in ("auto", 0.1, 0.5):
+        model = train_classifier(features, labels, "shrinkage-lda", classifier_param)
+        assert len(model.predict(features)) == len(labels)
+
+
+def test_shrinkage_lda_rejects_invalid_numeric_shrinkage(multiclass_data):
+    features, labels = multiclass_data
+    with pytest.raises(ValueError, match="shrinkage-lda classifier_param"):
+        train_classifier(features, labels, "shrinkage-lda", 1.5)
 
 
 def test_prediction_scores_supports_decision_function_and_probabilities(multiclass_data):
