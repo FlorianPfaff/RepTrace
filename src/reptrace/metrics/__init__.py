@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import numpy as np
 
-from reptrace.metrics.confusion import confusion_counts, per_class_accuracy
+from reptrace.metrics.confusion import confusion_category_enrichment, confusion_category_matrix, confusion_counts, confusion_pair_summary, per_class_accuracy
 from reptrace.metrics.prepost import compare_prepost_windows, summarize_window_metric
 
 __all__ = [
     "brier_score_multiclass",
     "compare_prepost_windows",
+    "confusion_category_enrichment",
+    "confusion_category_matrix",
     "confusion_counts",
+    "confusion_pair_summary",
     "expected_calibration_error",
     "per_class_accuracy",
     "reliability_bins",
