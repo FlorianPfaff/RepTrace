@@ -20,6 +20,7 @@ from reptrace.decoding import (
     time_windows,
 )
 from reptrace.metrics import brier_score_multiclass, expected_calibration_error, reliability_bins
+from reptrace.observations import ProbabilityObservationTable, stable_hash
 
 EMISSION_RUN_CHOICES = (*EMISSION_MODE_CHOICES, "both")
 
@@ -92,6 +93,19 @@ def run_time_resolved_decode(
     encoder = LabelEncoder()
     labels = encoder.fit_transform(raw_labels)
     groups = metadata[group_column].to_numpy() if group_column else None
+    session_values = metadata["session"].to_numpy() if "session" in metadata.columns else groups
+    splitter_name = "stratified-group-kfold" if groups is not None else "stratified-kfold"
+    split_id = f"{splitter_name}-{n_splits}"
+    preprocessing_hash = stable_hash(
+        {
+            "picks": picks,
+            "tmin": tmin,
+            "tmax": tmax,
+            "window_ms": window_ms,
+            "step_ms": step_ms,
+        }
+    )
+    model_hash = stable_hash({"backend": "sklearn", "decoder": decoder_name, "emission_mode": emission_mode, "max_iter": max_iter})
 
     data = epochs.get_data(copy=False)
     classes = np.arange(len(encoder.classes_))
@@ -157,13 +171,19 @@ def run_time_resolved_decode(
                         predicted_label = int(predictions[local_position])
                         observation = {
                             "fold": fold,
+                            "split_id": split_id,
+                            "seed": 13,
                             "decoder": decoder_name,
+                            "backend": "sklearn",
                             "emission_mode": current_emission_mode,
+                            "train_time": center,
+                            "test_time": center,
                             "time": center,
                             "window_start": float(epochs.times[start]),
                             "window_stop": float(epochs.times[stop - 1]),
                             "sample_index": int(original_indices[filtered_index]),
                             "sequence_id": int(original_indices[filtered_index]),
+                            "session": "" if session_values is None else session_values[filtered_index],
                             "true_label": true_label,
                             "true_class": str(encoder.classes_[true_label]),
                             "predicted_label": predicted_label,
@@ -171,6 +191,9 @@ def run_time_resolved_decode(
                             "probability_true_class": float(probabilities[local_position, true_label]),
                             "confidence": float(probabilities[local_position].max()),
                             "is_correct": bool(predicted_label == true_label),
+                            "calibration_fold": "",
+                            "preprocessing_hash": preprocessing_hash,
+                            "model_hash": stable_hash({"backend": "sklearn", "decoder": decoder_name, "emission_mode": current_emission_mode, "max_iter": max_iter}),
                         }
                         if group_column is not None:
                             observation["group"] = groups[filtered_index]
@@ -186,8 +209,16 @@ def run_time_resolved_decode(
         calibration_out_path.parent.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(calibration_rows).to_csv(calibration_out_path, index=False)
     if observation_out_path is not None:
-        observation_out_path.parent.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(observation_rows).to_csv(observation_out_path, index=False)
+        ProbabilityObservationTable(pd.DataFrame(observation_rows)).standardized(
+            defaults={
+                "backend": "sklearn",
+                "split_id": split_id,
+                "seed": 13,
+                "calibration_fold": "",
+                "preprocessing_hash": preprocessing_hash,
+                "model_hash": model_hash,
+            }
+        ).to_csv(observation_out_path)
     return results
 
 
