@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 from reptrace.observations import ProbabilityObservationTable, stable_hash
