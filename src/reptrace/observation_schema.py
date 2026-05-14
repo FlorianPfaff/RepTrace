@@ -11,13 +11,27 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
-ObservationProfile = Literal["generic", "temporal-model", "stimulus-detection"]
+ObservationProfile = Literal["generic", "canonical", "temporal-model", "stimulus-detection"]
 
-PROFILES: tuple[ObservationProfile, ...] = ("generic", "temporal-model", "stimulus-detection")
+PROFILES: tuple[ObservationProfile, ...] = ("generic", "canonical", "temporal-model", "stimulus-detection")
 DEFAULT_PROBABILITY_TOLERANCE = 1e-3
 DEFAULT_METADATA_COLUMNS = ("subject", "decoder", "emission_mode")
 REPORT_COLUMNS = ("severity", "code", "message", "column", "row", "value")
 STREAM_FALLBACK_COLUMNS = ("stream_id", "sequence_id", "sample_index")
+CANONICAL_REQUIRED_COLUMNS = (
+    "time",
+    "decoder",
+    "backend",
+    "emission_mode",
+    "split_id",
+    "seed",
+    "train_time",
+    "test_time",
+    "preprocessing_hash",
+    "model_hash",
+)
+CANONICAL_RECOMMENDED_COLUMNS = ("subject", "session", "fold", "calibration_fold")
+CANONICAL_NUMERIC_COLUMNS = ("seed", "train_time", "test_time")
 
 
 @dataclass(frozen=True)
@@ -125,6 +139,14 @@ def _issue(
     value: object | None = None,
 ) -> None:
     issues.append(ObservationValidationIssue(severity, code, message, column=column, row=row, value=value))
+
+
+def _present_mask(frame: pd.DataFrame, column: str) -> pd.Series:
+    values = frame[column]
+    present = values.notna()
+    if values.dtype == object or pd.api.types.is_string_dtype(values):
+        present &= values.astype("string").str.strip().ne("").fillna(False)
+    return present
 
 
 def _numeric_series(frame: pd.DataFrame, column: str, issues: list[ObservationValidationIssue], *, allow_nan: bool = False) -> pd.Series:
@@ -353,6 +375,208 @@ def _validate_stimulus_profile(frame: pd.DataFrame, stream_columns: Sequence[str
         )
 
 
+def _validate_required_columns(frame: pd.DataFrame, issues: list[ObservationValidationIssue], columns: Sequence[str]) -> None:
+    for column in columns:
+        if column not in frame.columns:
+            _issue(
+                issues,
+                "error",
+                "missing_canonical_column",
+                f"Canonical probability observations must contain column '{column}'.",
+                column=column,
+            )
+            continue
+        missing = ~_present_mask(frame, column)
+        for row_index, value in frame.loc[missing, column].head(20).items():
+            _issue(
+                issues,
+                "error",
+                "empty_canonical_column",
+                f"Canonical probability observations must not contain empty values in column '{column}'.",
+                column=column,
+                row=int(row_index),
+                value=value,
+            )
+
+
+def _validate_recommended_columns(frame: pd.DataFrame, issues: list[ObservationValidationIssue], columns: Sequence[str]) -> None:
+    for column in columns:
+        if column not in frame.columns:
+            _issue(
+                issues,
+                "warning",
+                f"missing_recommended_{column}",
+                f"Column '{column}' is recommended for canonical probability observations.",
+                column=column,
+            )
+
+
+def _numeric_label_to_probability_columns(prob_columns: Sequence[str]) -> dict[int, str]:
+    label_columns: dict[int, str] = {}
+    for column in prob_columns:
+        suffix = column.removeprefix("prob_class_")
+        if suffix.isdigit():
+            label_columns[int(suffix)] = column
+    return label_columns
+
+
+def _validate_probability_consistency(
+    frame: pd.DataFrame,
+    probabilities: pd.DataFrame,
+    prob_columns: Sequence[str],
+    issues: list[ObservationValidationIssue],
+    *,
+    tolerance: float,
+) -> None:
+    if probabilities.empty:
+        return
+    probability_values = probabilities.to_numpy(dtype=float)
+    finite_row = np.isfinite(probability_values).any(axis=1)
+    filled = np.where(np.isfinite(probability_values), probability_values, -np.inf)
+    max_probabilities = np.nanmax(probability_values, axis=1)
+    argmax_positions = filled.argmax(axis=1)
+    label_columns = _numeric_label_to_probability_columns(prob_columns)
+    ordered_labels = [int(column.removeprefix("prob_class_")) if column.removeprefix("prob_class_").isdigit() else None for column in prob_columns]
+
+    if "confidence" in frame.columns:
+        confidence = _numeric_series(frame, "confidence", issues, allow_nan=True)
+        confidence_values = confidence.to_numpy(dtype=float)
+        bad_confidence = confidence.notna() & finite_row & (np.abs(confidence_values - max_probabilities) > tolerance)
+        for row_index, value in confidence.loc[bad_confidence].head(20).items():
+            _issue(
+                issues,
+                "error",
+                "confidence_probability_mismatch",
+                "Column 'confidence' must equal the maximum prob_class_* value within tolerance.",
+                column="confidence",
+                row=int(row_index),
+                value=float(value),
+            )
+
+    if "predicted_label" in frame.columns and all(label is not None for label in ordered_labels):
+        predicted_label = _numeric_series(frame, "predicted_label", issues, allow_nan=True)
+        expected = pd.Series([ordered_labels[position] for position in argmax_positions], index=frame.index, dtype=float)
+        bad_prediction = predicted_label.notna() & finite_row & (predicted_label.astype(float) != expected)
+        for row_index, value in predicted_label.loc[bad_prediction].head(20).items():
+            _issue(
+                issues,
+                "error",
+                "predicted_label_probability_mismatch",
+                "Column 'predicted_label' must equal the argmax prob_class_* label.",
+                column="predicted_label",
+                row=int(row_index),
+                value=int(value),
+            )
+
+    if "probability_true_class" in frame.columns and "true_label" in frame.columns and label_columns:
+        true_label = _numeric_series(frame, "true_label", issues, allow_nan=True)
+        probability_true_class = _numeric_series(frame, "probability_true_class", issues, allow_nan=True)
+        for row_index, label_value in true_label.dropna().items():
+            label = int(label_value)
+            column = label_columns.get(label)
+            if column is None or pd.isna(probability_true_class.loc[row_index]):
+                continue
+            expected_probability = float(probabilities.loc[row_index, column])
+            observed_probability = float(probability_true_class.loc[row_index])
+            if abs(observed_probability - expected_probability) > tolerance:
+                _issue(
+                    issues,
+                    "error",
+                    "true_probability_mismatch",
+                    "Column 'probability_true_class' must match prob_class_<true_label> within tolerance.",
+                    column="probability_true_class",
+                    row=int(row_index),
+                    value=observed_probability,
+                )
+
+    if "predicted_class" in frame.columns and "predicted_label" in frame.columns:
+        predicted_label = pd.to_numeric(frame["predicted_label"], errors="coerce")
+        for row_index, label_value in predicted_label.dropna().items():
+            class_column = f"class_{int(label_value)}"
+            if class_column not in frame.columns or pd.isna(frame.loc[row_index, "predicted_class"]):
+                continue
+            expected_class = str(frame.loc[row_index, class_column])
+            observed_class = str(frame.loc[row_index, "predicted_class"])
+            if observed_class != expected_class:
+                _issue(
+                    issues,
+                    "error",
+                    "predicted_class_mismatch",
+                    "Column 'predicted_class' must match class_<predicted_label>.",
+                    column="predicted_class",
+                    row=int(row_index),
+                    value=observed_class,
+                )
+
+
+def _validate_canonical_profile(
+    frame: pd.DataFrame,
+    probabilities: pd.DataFrame,
+    prob_columns: Sequence[str],
+    issues: list[ObservationValidationIssue],
+    *,
+    probability_tolerance: float,
+) -> None:
+    _validate_required_columns(frame, issues, CANONICAL_REQUIRED_COLUMNS)
+    _validate_recommended_columns(frame, issues, CANONICAL_RECOMMENDED_COLUMNS)
+    for column in CANONICAL_NUMERIC_COLUMNS:
+        if column in frame.columns:
+            numeric = _numeric_series(frame, column, issues)
+            non_finite = numeric.notna() & ~np.isfinite(numeric.to_numpy(dtype=float))
+            for row_index, value in frame.loc[non_finite, column].head(20).items():
+                _issue(
+                    issues,
+                    "error",
+                    f"non_finite_{column}",
+                    f"Column '{column}' must contain finite numeric values.",
+                    column=column,
+                    row=int(row_index),
+                    value=value,
+                )
+    if "time" in frame.columns and "test_time" in frame.columns:
+        time_values = pd.to_numeric(frame["time"], errors="coerce")
+        test_time_values = pd.to_numeric(frame["test_time"], errors="coerce")
+        mismatch = time_values.notna() & test_time_values.notna() & ((time_values - test_time_values).abs() > probability_tolerance)
+        for row_index, value in test_time_values.loc[mismatch].head(20).items():
+            _issue(
+                issues,
+                "error",
+                "time_test_time_mismatch",
+                "Column 'time' must match 'test_time' within tolerance for canonical observations.",
+                column="test_time",
+                row=int(row_index),
+                value=float(value),
+            )
+    _validate_probability_consistency(frame, probabilities, prob_columns, issues, tolerance=probability_tolerance)
+    if "stream_id" in frame.columns and _present_mask(frame, "stream_id").any():
+        stream_rows = _present_mask(frame, "stream_id")
+        for column in ("sample_index", "sequence_id"):
+            if column not in frame.columns:
+                _issue(
+                    issues,
+                    "error",
+                    "missing_stream_identity_column",
+                    f"Canonical continuous observations with 'stream_id' must contain '{column}'.",
+                    column=column,
+                )
+                continue
+            missing = stream_rows & ~_present_mask(frame, column)
+            for row_index, value in frame.loc[missing, column].head(20).items():
+                _issue(
+                    issues,
+                    "error",
+                    "empty_stream_identity_column",
+                    f"Canonical continuous observations with 'stream_id' must not contain empty values in '{column}'.",
+                    column=column,
+                    row=int(row_index),
+                    value=value,
+                )
+        if {"stream_id", "sample_index"}.issubset(frame.columns):
+            duplicate_count = int(frame.loc[stream_rows].duplicated(["stream_id", "sample_index"], keep=False).sum())
+            if duplicate_count:
+                _issue(issues, "error", "duplicate_stream_sample", f"{duplicate_count} row(s) share the same stream_id and sample_index.")
+
+
 def validate_probability_observations(
     frame: pd.DataFrame,
     *,
@@ -378,11 +602,18 @@ def validate_probability_observations(
     _validate_group_columns(frame, group_columns, issues)
     prob_columns = _try_probability_columns(frame, issues)
     probabilities = _probability_frame(frame, prob_columns, issues)
-    _validate_probabilities(probabilities, issues, tolerance=probability_tolerance, require_normalized=require_normalized)
+    _validate_probabilities(
+        probabilities,
+        issues,
+        tolerance=probability_tolerance,
+        require_normalized=require_normalized or profile == "canonical",
+    )
     _validate_metadata(frame, issues)
     _validate_class_columns(frame, prob_columns, issues)
 
-    if profile == "temporal-model":
+    if profile == "canonical":
+        _validate_canonical_profile(frame, probabilities, prob_columns, issues, probability_tolerance=probability_tolerance)
+    elif profile == "temporal-model":
         _validate_temporal_profile(frame, issues)
     elif profile == "stimulus-detection":
         _validate_stimulus_profile(frame, stream_columns, issues)
@@ -406,19 +637,20 @@ def _normalize_probability_rows(frame: pd.DataFrame, prob_columns: Sequence[str]
 
 def _add_reader_defaults(frame: pd.DataFrame, csv_path: Path, *, profile: ObservationProfile) -> pd.DataFrame:
     result = frame.copy()
-    if profile == "temporal-model" and "sequence_id" not in result.columns and "sample_index" in result.columns:
-        result["sequence_id"] = result["sample_index"]
-    if profile == "stimulus-detection" and "stream_id" not in result.columns and "sequence_id" not in result.columns:
-        if "sample_index" in result.columns:
+    if profile != "canonical":
+        if profile == "temporal-model" and "sequence_id" not in result.columns and "sample_index" in result.columns:
             result["sequence_id"] = result["sample_index"]
-        else:
-            result["stream_id"] = csv_path.stem
-    if "subject" not in result.columns:
-        result["subject"] = csv_path.stem
-    if "decoder" not in result.columns:
-        result["decoder"] = "decoder"
-    if "emission_mode" not in result.columns:
-        result["emission_mode"] = "calibrated"
+        if profile == "stimulus-detection" and "stream_id" not in result.columns and "sequence_id" not in result.columns:
+            if "sample_index" in result.columns:
+                result["sequence_id"] = result["sample_index"]
+            else:
+                result["stream_id"] = csv_path.stem
+        if "subject" not in result.columns:
+            result["subject"] = csv_path.stem
+        if "decoder" not in result.columns:
+            result["decoder"] = "decoder"
+        if "emission_mode" not in result.columns:
+            result["emission_mode"] = "calibrated"
     if "source_file" not in result.columns:
         result["source_file"] = csv_path.name
     return result
