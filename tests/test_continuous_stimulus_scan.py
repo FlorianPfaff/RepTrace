@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from reptrace.continuous_stimulus_scan import label_event_table, run_continuous_stimulus_scan
+from reptrace.observation_schema import validate_probability_observations
 
 
 def _write_raw(path: Path, events: pd.DataFrame, *, sfreq: float = 100.0, duration: float = 9.0) -> None:
@@ -94,6 +95,32 @@ def test_continuous_stimulus_scan_trains_scans_and_summarizes_events(tmp_path: P
     )
 
     assert not result.observations.empty
+    assert {
+        "subject",
+        "stream_id",
+        "fold",
+        "split_id",
+        "seed",
+        "decoder",
+        "backend",
+        "emission_mode",
+        "train_time",
+        "test_time",
+        "time",
+        "sequence_id",
+        "calibration_fold",
+        "preprocessing_hash",
+        "model_hash",
+        "prob_class_0",
+        "prob_class_1",
+    }.issubset(result.observations.columns)
+    assert result.observations["backend"].unique().tolist() == ["sklearn"]
+    assert result.observations["seed"].unique().tolist() == [13]
+    assert result.observations["test_time"].round(6).tolist() == result.observations["time"].round(6).tolist()
+    assert result.observations["sequence_id"].str.contains(":").all()
+    assert result.observations["preprocessing_hash"].str.len().eq(16).all()
+    assert result.observations["model_hash"].str.len().eq(16).all()
+    assert validate_probability_observations(result.observations, profile="stimulus-detection").is_valid
     assert result.annotations["stimulus_class"].tolist() == ["A", "A"]
     assert set(result.events["stimulus_class"]) == {"A"}
     assert result.summary.iloc[0]["n_annotations"] == 2
