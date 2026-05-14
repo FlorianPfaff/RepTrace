@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Protocol
+
 import numpy as np
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
@@ -9,8 +13,206 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
 
+from reptrace.observations import ProbabilityObservationTable, stable_hash
+
 DECODER_CHOICES = ("logistic", "lda", "linear_svm")
 EMISSION_MODE_CHOICES = ("calibrated", "uncalibrated")
+
+
+@dataclass(frozen=True)
+class DecoderPredictionResult:
+    """Held-out probabilities emitted by a decoder backend."""
+
+    probabilities: np.ndarray
+    predictions: np.ndarray
+    test_labels: np.ndarray
+    model: object
+    backend: str
+    decoder: str
+    emission_mode: str
+
+
+class DecoderBackend(Protocol):
+    """Feature-matrix decoder backend that can emit canonical observations."""
+
+    name: str
+    decoder: str
+    emission_mode: str
+
+    def fit(self, features: np.ndarray, labels: np.ndarray) -> object:
+        """Fit the backend on a feature matrix and integer labels."""
+        ...
+
+    def predict_probabilities(self, model: object, features: np.ndarray) -> np.ndarray:
+        """Return class probabilities or probability-like emissions."""
+        ...
+
+    def fit_predict(
+        self,
+        features: np.ndarray,
+        labels: np.ndarray,
+        train_idx: np.ndarray,
+        test_idx: np.ndarray,
+    ) -> DecoderPredictionResult:
+        """Fit on ``train_idx`` and predict held-out probabilities for ``test_idx``."""
+        ...
+
+    def build_observation_table(
+        self,
+        result: DecoderPredictionResult,
+        *,
+        class_names: Sequence[object],
+        test_indices: Sequence[int] | np.ndarray,
+        fold: int | str,
+        time: float,
+        original_indices: Sequence[int] | np.ndarray | None = None,
+        subject: str | None = None,
+        session_values: Sequence[object] | np.ndarray | None = None,
+        group_values: Sequence[object] | np.ndarray | None = None,
+        split_id: str = "",
+        seed: int | str | None = None,
+        train_time: float | None = None,
+        window_start: float | None = None,
+        window_stop: float | None = None,
+        calibration_fold: str | int | None = None,
+        preprocessing_hash: str = "",
+        model_hash: str | None = None,
+    ) -> ProbabilityObservationTable:
+        """Build canonical observation rows from held-out predictions."""
+        ...
+
+
+@dataclass(frozen=True)
+class SklearnDecoderBackend:
+    """Scikit-learn backend for RepTrace feature-matrix decoders."""
+
+    decoder: str = "logistic"
+    max_iter: int = 1000
+    emission_mode: str = "calibrated"
+    name: str = "sklearn"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "decoder", normalize_decoder_name(self.decoder))
+        object.__setattr__(self, "emission_mode", normalize_emission_mode(self.emission_mode))
+
+    def model_hash(self) -> str:
+        """Return a stable hash for this backend/model configuration."""
+        return stable_hash(
+            {
+                "backend": self.name,
+                "decoder": self.decoder,
+                "emission_mode": self.emission_mode,
+                "max_iter": self.max_iter,
+            }
+        )
+
+    def fit(self, features: np.ndarray, labels: np.ndarray) -> object:
+        """Fit the configured scikit-learn decoder."""
+        model = make_decoder(self.decoder, max_iter=self.max_iter, emission_mode=self.emission_mode)
+        model.fit(features, labels)
+        return model
+
+    def predict_probabilities(self, model: object, features: np.ndarray) -> np.ndarray:
+        """Predict calibrated probabilities or score-derived emissions."""
+        return predict_emission_probabilities(model, features, emission_mode=self.emission_mode)
+
+    def fit_predict(
+        self,
+        features: np.ndarray,
+        labels: np.ndarray,
+        train_idx: np.ndarray,
+        test_idx: np.ndarray,
+    ) -> DecoderPredictionResult:
+        """Fit on ``train_idx`` and predict held-out probabilities for ``test_idx``."""
+        model = self.fit(features[train_idx], labels[train_idx])
+        probabilities = self.predict_probabilities(model, features[test_idx])
+        return DecoderPredictionResult(
+            probabilities=probabilities,
+            predictions=probabilities.argmax(axis=1),
+            test_labels=labels[test_idx],
+            model=model,
+            backend=self.name,
+            decoder=self.decoder,
+            emission_mode=self.emission_mode,
+        )
+
+    def build_observation_table(
+        self,
+        result: DecoderPredictionResult,
+        *,
+        class_names: Sequence[object],
+        test_indices: Sequence[int] | np.ndarray,
+        fold: int | str,
+        time: float,
+        original_indices: Sequence[int] | np.ndarray | None = None,
+        subject: str | None = None,
+        session_values: Sequence[object] | np.ndarray | None = None,
+        group_values: Sequence[object] | np.ndarray | None = None,
+        split_id: str = "",
+        seed: int | str | None = None,
+        train_time: float | None = None,
+        window_start: float | None = None,
+        window_stop: float | None = None,
+        calibration_fold: str | int | None = None,
+        preprocessing_hash: str = "",
+        model_hash: str | None = None,
+    ) -> ProbabilityObservationTable:
+        """Build canonical observation rows from a backend prediction result."""
+        return ProbabilityObservationTable.from_decoded_fold(
+            probabilities=result.probabilities,
+            test_labels=result.test_labels,
+            predictions=result.predictions,
+            class_names=class_names,
+            test_indices=test_indices,
+            fold=fold,
+            decoder=result.decoder,
+            backend=result.backend,
+            emission_mode=result.emission_mode,
+            time=time,
+            original_indices=original_indices,
+            subject=subject,
+            session_values=session_values,
+            group_values=group_values,
+            split_id=split_id,
+            seed=seed,
+            train_time=train_time,
+            window_start=window_start,
+            window_stop=window_stop,
+            calibration_fold=calibration_fold,
+            preprocessing_hash=preprocessing_hash,
+            model_hash=self.model_hash() if model_hash is None else model_hash,
+        )
+
+    def fit_predict_observation_table(
+        self,
+        features: np.ndarray,
+        labels: np.ndarray,
+        train_idx: np.ndarray,
+        test_idx: np.ndarray,
+        **observation_kwargs: object,
+    ) -> ProbabilityObservationTable:
+        """Fit, predict, and return canonical held-out observation rows."""
+        result = self.fit_predict(features, labels, train_idx, test_idx)
+        return self.build_observation_table(result, test_indices=test_idx, **observation_kwargs)
+
+
+def make_decoder_backend(
+    decoder: str = "logistic",
+    *,
+    backend: str = "sklearn",
+    max_iter: int = 1000,
+    emission_mode: str = "calibrated",
+) -> DecoderBackend:
+    """Create a feature-matrix decoder backend.
+
+    The backend API is intentionally independent of MNE objects so it can be
+    used by epoch workflows, continuous-scan workflows, and future deep-model
+    backends that produce the same canonical probability-observation table.
+    """
+    normalized_backend = backend.lower().replace("-", "_")
+    if normalized_backend in {"sklearn", "scikit_learn"}:
+        return SklearnDecoderBackend(decoder=decoder, max_iter=max_iter, emission_mode=emission_mode)
+    raise ValueError(f"Unknown decoder backend {backend!r}. Available backends: sklearn.")
 
 
 def make_logistic_decoder(max_iter: int = 1000):

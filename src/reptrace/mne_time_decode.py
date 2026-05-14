@@ -13,13 +13,13 @@ from reptrace.decoding import (
     DECODER_CHOICES,
     EMISSION_MODE_CHOICES,
     make_cross_validator,
-    make_decoder,
+    make_decoder_backend,
     normalize_decoder_name,
     normalize_emission_mode,
-    predict_emission_probabilities,
     time_windows,
 )
 from reptrace.metrics import brier_score_multiclass, expected_calibration_error, reliability_bins
+from reptrace.observations import ProbabilityObservationTable
 
 EMISSION_RUN_CHOICES = (*EMISSION_MODE_CHOICES, "both")
 
@@ -97,22 +97,17 @@ def run_time_resolved_decode(
     classes = np.arange(len(encoder.classes_))
     rows = []
     calibration_rows = []
-    observation_rows = []
+    observation_tables: list[ProbabilityObservationTable] = []
 
     for start, stop, center in time_windows(epochs.times, window_ms=window_ms, step_ms=step_ms):
         features = data[:, :, start:stop].reshape(len(labels), -1)
         for fold, (train_idx, test_idx) in enumerate(make_cross_validator(labels, groups, n_splits)):
             for current_emission_mode in emission_modes:
-                model = make_decoder(decoder_name, max_iter=max_iter, emission_mode=current_emission_mode)
-                model.fit(features[train_idx], labels[train_idx])
-
-                probabilities = predict_emission_probabilities(
-                    model,
-                    features[test_idx],
-                    emission_mode=current_emission_mode,
-                )
-                predictions = probabilities.argmax(axis=1)
-                test_labels = labels[test_idx]
+                backend = make_decoder_backend(decoder_name, max_iter=max_iter, emission_mode=current_emission_mode)
+                fit_result = backend.fit_predict(features, labels, train_idx, test_idx)
+                probabilities = fit_result.probabilities
+                predictions = fit_result.predictions
+                test_labels = fit_result.test_labels
 
                 rows.append(
                     _add_subject(
@@ -152,32 +147,23 @@ def run_time_resolved_decode(
                             )
                         )
                 if observation_out_path is not None:
-                    for local_position, filtered_index in enumerate(test_idx):
-                        true_label = int(test_labels[local_position])
-                        predicted_label = int(predictions[local_position])
-                        observation = {
-                            "fold": fold,
-                            "decoder": decoder_name,
-                            "emission_mode": current_emission_mode,
-                            "time": center,
-                            "window_start": float(epochs.times[start]),
-                            "window_stop": float(epochs.times[stop - 1]),
-                            "sample_index": int(original_indices[filtered_index]),
-                            "sequence_id": int(original_indices[filtered_index]),
-                            "true_label": true_label,
-                            "true_class": str(encoder.classes_[true_label]),
-                            "predicted_label": predicted_label,
-                            "predicted_class": str(encoder.classes_[predicted_label]),
-                            "probability_true_class": float(probabilities[local_position, true_label]),
-                            "confidence": float(probabilities[local_position].max()),
-                            "is_correct": bool(predicted_label == true_label),
-                        }
-                        if group_column is not None:
-                            observation["group"] = groups[filtered_index]
-                        for class_index, class_name in enumerate(encoder.classes_):
-                            observation[f"class_{class_index}"] = str(class_name)
-                            observation[f"prob_class_{class_index}"] = float(probabilities[local_position, class_index])
-                        observation_rows.append(_add_subject(observation, subject))
+                    observation_tables.append(
+                        backend.build_observation_table(
+                            fit_result,
+                            class_names=encoder.classes_,
+                            test_indices=test_idx,
+                            fold=fold,
+                            time=center,
+                            original_indices=original_indices,
+                            subject=subject,
+                            group_values=groups,
+                            seed=13,
+                            train_time=center,
+                            window_start=float(epochs.times[start]),
+                            window_stop=float(epochs.times[stop - 1]),
+                            calibration_fold="",
+                        )
+                    )
 
     results = pd.DataFrame(rows)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -187,7 +173,10 @@ def run_time_resolved_decode(
         pd.DataFrame(calibration_rows).to_csv(calibration_out_path, index=False)
     if observation_out_path is not None:
         observation_out_path.parent.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(observation_rows).to_csv(observation_out_path, index=False)
+        ProbabilityObservationTable.concat(observation_tables).standardized(defaults={"backend": "sklearn"}).frame.to_csv(
+            observation_out_path,
+            index=False,
+        )
     return results
 
 
