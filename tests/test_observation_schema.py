@@ -29,6 +29,25 @@ def _valid_observations() -> pd.DataFrame:
     )
 
 
+def _valid_canonical_observations() -> pd.DataFrame:
+    frame = _valid_observations().copy()
+    frame["session"] = ["run-01", "run-01"]
+    frame["fold"] = [0, 0]
+    frame["split_id"] = ["split-001", "split-001"]
+    frame["seed"] = [13, 13]
+    frame["backend"] = ["sklearn", "sklearn"]
+    frame["train_time"] = frame["time"]
+    frame["test_time"] = frame["time"]
+    frame["true_label"] = [1, 1]
+    frame["predicted_label"] = [0, 1]
+    frame["probability_true_class"] = [0.4, 0.55]
+    frame["confidence"] = [0.6, 0.55]
+    frame["calibration_fold"] = ["", ""]
+    frame["preprocessing_hash"] = ["pre-123", "pre-123"]
+    frame["model_hash"] = ["model-456", "model-456"]
+    return frame
+
+
 def test_probability_columns_are_sorted_by_class_index() -> None:
     frame = pd.DataFrame({"prob_class_10": [0.1], "prob_class_2": [0.2], "prob_class_1": [0.7]})
 
@@ -96,6 +115,50 @@ def test_stimulus_profile_accepts_stream_id() -> None:
     assert report.is_valid
 
 
+def test_canonical_profile_accepts_standard_observations() -> None:
+    report = validate_probability_observations(_valid_canonical_observations(), profile="canonical")
+
+    assert report.is_valid
+    assert not report.errors
+
+
+def test_canonical_profile_requires_provenance_columns() -> None:
+    report = validate_probability_observations(_valid_canonical_observations().drop(columns=["backend"]), profile="canonical")
+
+    assert not report.is_valid
+    assert any(issue.code == "missing_canonical_column" and issue.column == "backend" for issue in report.errors)
+
+
+def test_canonical_profile_checks_prediction_consistency() -> None:
+    frame = _valid_canonical_observations()
+    frame.loc[0, "predicted_label"] = 1
+
+    report = validate_probability_observations(frame, profile="canonical")
+
+    assert not report.is_valid
+    assert any(issue.code == "predicted_label_probability_mismatch" for issue in report.errors)
+
+
+def test_canonical_profile_checks_confidence_consistency() -> None:
+    frame = _valid_canonical_observations()
+    frame.loc[0, "confidence"] = 0.1
+
+    report = validate_probability_observations(frame, profile="canonical")
+
+    assert not report.is_valid
+    assert any(issue.code == "confidence_probability_mismatch" for issue in report.errors)
+
+
+def test_canonical_profile_checks_true_probability_consistency() -> None:
+    frame = _valid_canonical_observations()
+    frame.loc[0, "probability_true_class"] = 0.9
+
+    report = validate_probability_observations(frame, profile="canonical")
+
+    assert not report.is_valid
+    assert any(issue.code == "true_probability_mismatch" for issue in report.errors)
+
+
 def test_read_validated_probability_observations_adds_reader_defaults(tmp_path) -> None:
     csv_path = tmp_path / "observations.csv"
     pd.DataFrame({"sample_index": [0, 0], "time": [0.0, 0.1], "prob_class_0": [0.4, 0.6], "prob_class_1": [0.6, 0.4]}).to_csv(csv_path, index=False)
@@ -143,3 +206,12 @@ def test_validate_observations_cli_returns_one_for_validation_errors(tmp_path) -
     exit_code = validate_observations_main([str(csv_path)])
 
     assert exit_code == 1
+
+
+def test_validate_observations_cli_accepts_canonical_profile(tmp_path) -> None:
+    csv_path = tmp_path / "canonical.csv"
+    _valid_canonical_observations().to_csv(csv_path, index=False)
+
+    exit_code = validate_observations_main([str(csv_path), "--profile", "canonical"])
+
+    assert exit_code == 0
