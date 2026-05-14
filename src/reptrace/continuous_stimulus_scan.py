@@ -13,6 +13,7 @@ from sklearn.metrics import accuracy_score, log_loss
 from sklearn.preprocessing import LabelEncoder
 
 from reptrace.decoding import make_decoder, normalize_decoder_name, normalize_emission_mode, predict_emission_probabilities
+from reptrace.observations import ProbabilityObservationTable, stable_hash
 from reptrace.stimulus_detection import (
     CONFLICT_RESOLUTION_MODES,
     SCORE_MODES,
@@ -194,6 +195,69 @@ def _fit_decoder(
 
 def _safe_stream_id(path: Path) -> str:
     return path.stem.replace("_meg", "").replace(" ", "_")
+
+
+def _continuous_split_id(*, train_raw: Path, scan_raw: Path, slice_seed: int) -> str:
+    return f"continuous-train-{train_raw.stem}-scan-{scan_raw.stem}-seed-{slice_seed}"
+
+
+def _continuous_preprocessing_hash(
+    *,
+    train_window: tuple[float, float],
+    picks: str | Sequence[str],
+    baseline: tuple[float | None, float | None] | None,
+    demean_window: bool,
+    scan_step: float,
+    n_window_samples: int,
+    channel_names: Sequence[str],
+) -> str:
+    return stable_hash(
+        {
+            "train_window": train_window,
+            "picks": picks,
+            "baseline": baseline,
+            "demean_window": demean_window,
+            "scan_step": scan_step,
+            "n_window_samples": n_window_samples,
+            "channel_names": list(channel_names),
+        }
+    )
+
+
+def _continuous_model_hash(*, decoder: str, emission_mode: str, max_iter: int, train_window: tuple[float, float]) -> str:
+    return stable_hash({"backend": "sklearn", "decoder": decoder, "emission_mode": emission_mode, "max_iter": max_iter, "train_window": train_window})
+
+
+def _standardize_stream_observations(
+    observations: pd.DataFrame,
+    *,
+    subject: str | None,
+    split_id: str,
+    slice_seed: int,
+    decoder: str,
+    emission_mode: str,
+    train_time: float,
+    preprocessing_hash: str,
+    model_hash: str,
+) -> pd.DataFrame:
+    standardized = observations.copy()
+    if "sequence_id" not in standardized.columns and {"stream_id", "sample_index"}.issubset(standardized.columns):
+        standardized["sequence_id"] = standardized["stream_id"].astype(str) + ":" + standardized["sample_index"].astype(str)
+    return ProbabilityObservationTable(standardized).standardized(
+        defaults={
+            "subject": "" if subject is None else subject,
+            "fold": "",
+            "split_id": split_id,
+            "seed": slice_seed,
+            "decoder": decoder,
+            "backend": "sklearn",
+            "emission_mode": emission_mode,
+            "train_time": train_time,
+            "calibration_fold": "",
+            "preprocessing_hash": preprocessing_hash,
+            "model_hash": model_hash,
+        }
+    ).frame
 
 
 def _event_mask_in_window(events: pd.DataFrame, *, onset_column: str, start: float, stop: float, labels: set[str] | None = None, label_column: str = "stimulus_class") -> pd.Series:
@@ -495,6 +559,22 @@ def run_continuous_stimulus_scan(
     )
     targets = list(target_classes or [str(encoder.classes_[0])])
     latency = float(np.mean(train_window)) if annotation_latency is None else annotation_latency
+    split_id = _continuous_split_id(train_raw=train_raw, scan_raw=scan_raw, slice_seed=slice_seed)
+    preprocessing_hash = _continuous_preprocessing_hash(
+        train_window=train_window,
+        picks=picks,
+        baseline=baseline,
+        demean_window=demean_window,
+        scan_step=scan_step,
+        n_window_samples=n_window_samples,
+        channel_names=channel_names,
+    )
+    model_hash = _continuous_model_hash(
+        decoder=decoder_name,
+        emission_mode=emission_mode_name,
+        max_iter=max_iter,
+        train_window=train_window,
+    )
     segments = build_scan_segments(
         scan_raw=scan_raw,
         scan_start=scan_start,
@@ -525,6 +605,17 @@ def run_continuous_stimulus_scan(
         emission_mode=emission_mode_name,
         subject=subject,
         demean_window=demean_window,
+    )
+    observations = _standardize_stream_observations(
+        observations,
+        subject=subject,
+        split_id=split_id,
+        slice_seed=slice_seed,
+        decoder=decoder_name,
+        emission_mode=emission_mode_name,
+        train_time=float(np.mean(train_window)),
+        preprocessing_hash=preprocessing_hash,
+        model_hash=model_hash,
     )
     annotations = _annotation_table(
         scan_events=scan_events,
