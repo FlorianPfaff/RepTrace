@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -115,11 +115,27 @@ def read_probability_observations(
 read_time_decode_observations = read_probability_observations
 
 
-def _mean_across_folds(results: pd.DataFrame, group_columns: list[str]) -> pd.DataFrame:
+def _mean_across_folds(
+    results: pd.DataFrame,
+    group_columns: list[str],
+    *,
+    metric_columns: Sequence[str] | str | None = None,
+) -> pd.DataFrame:
     """Average fold metrics, weighting by held-out sample count when available."""
-    metric_columns = list(METRIC_COLUMNS)
+    if metric_columns is None:
+        selected_metric_columns = list(METRIC_COLUMNS)
+    elif isinstance(metric_columns, str):
+        selected_metric_columns = [metric_columns]
+    else:
+        selected_metric_columns = list(metric_columns)
+    if not selected_metric_columns:
+        raise ValueError("At least one metric column is required.")
+    missing = [column for column in selected_metric_columns if column not in results.columns]
+    if missing:
+        raise ValueError(f"Results are missing metric columns: {missing}")
+
     if WEIGHT_COLUMN not in results.columns:
-        return results.groupby(group_columns, as_index=False)[metric_columns].mean()
+        return results.groupby(group_columns, as_index=False)[selected_metric_columns].mean()
 
     weighted = results.copy()
     weights = pd.to_numeric(weighted[WEIGHT_COLUMN], errors="coerce")
@@ -129,7 +145,7 @@ def _mean_across_folds(results: pd.DataFrame, group_columns: list[str]) -> pd.Da
 
     weighted_columns = []
     denominator_columns = []
-    for metric in metric_columns:
+    for metric in selected_metric_columns:
         values = pd.to_numeric(weighted[metric], errors="coerce")
         weighted_column = f"__weighted_{metric}"
         denominator_column = f"__weight_{metric}"
@@ -140,10 +156,12 @@ def _mean_across_folds(results: pd.DataFrame, group_columns: list[str]) -> pd.Da
 
     aggregate_columns = [*weighted_columns, *denominator_columns]
     grouped = weighted.groupby(group_columns, as_index=False)[aggregate_columns].sum()
-    for metric, weighted_column, denominator_column in zip(metric_columns, weighted_columns, denominator_columns):
+    for metric, weighted_column, denominator_column in zip(
+        selected_metric_columns, weighted_columns, denominator_columns
+    ):
         grouped[metric] = grouped[weighted_column] / grouped[denominator_column]
 
-    return grouped[[*group_columns, *metric_columns]]
+    return grouped[[*group_columns, *selected_metric_columns]]
 
 
 mean_across_folds = _mean_across_folds
