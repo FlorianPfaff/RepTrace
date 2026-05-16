@@ -169,15 +169,15 @@ def subject_time_effects(
     observation_csv_paths: list[Path] | None = None,
     observation_subject_column: str | None = None,
     ece_bins: int = DEFAULT_ECE_BINS,
-    metric_direction: str = "auto",
+    metric_direction: str = "higher",
 ) -> pd.DataFrame:
-    """Return a subject-by-time matrix of signed effects against a reference value.
+    """Return a subject-by-time matrix of effects against a reference value.
 
-    The sign is chosen so positive values always mean "better than the reference":
-    higher-is-better metrics use ``metric - chance``, while lower-is-better
-    metrics use ``chance - metric``. ECE inference uses pooled held-out
-    probability observations. Pass ``observation_csv_paths`` when ``metric='ece'``;
-    fold-averaged ECE is not used for inferential tests.
+    By default the effect is ``metric - chance``, preserving the helper's
+    historical raw-difference convention. Pass ``metric_direction='auto'`` to
+    use better-than-reference signing for lower-is-better metrics. ECE inference
+    uses pooled held-out probability observations. Pass ``observation_csv_paths``
+    when ``metric='ece'``; fold-averaged ECE is not used for inferential tests.
     """
     effects, _, _ = _subject_time_effects_and_conditions(
         csv_paths,
