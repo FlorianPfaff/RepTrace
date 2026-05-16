@@ -15,6 +15,14 @@ from reptrace.results import (
     subject_time_metrics,
 )
 
+METRIC_DIRECTIONS = {
+    "accuracy": "higher",
+    "log_loss": "lower",
+    "brier": "lower",
+    "ece": "lower",
+}
+METRIC_DIRECTION_CHOICES = ("auto", "higher", "lower")
+
 
 def _expand_paths(patterns: list[str]) -> list[Path]:
     paths: list[Path] = []
@@ -86,6 +94,23 @@ def _single_condition_values(results: pd.DataFrame, filters: dict[str, str]) -> 
     return condition_values
 
 
+def _resolve_metric_direction(metric: str, metric_direction: str = "auto") -> str:
+    normalized = metric_direction.lower().replace("_", "-")
+    if normalized not in METRIC_DIRECTION_CHOICES:
+        raise ValueError(f"metric_direction must be one of {METRIC_DIRECTION_CHOICES}.")
+    if normalized == "auto":
+        return METRIC_DIRECTIONS.get(metric, "higher")
+    return normalized
+
+
+def _signed_effects(matrix: pd.DataFrame, *, reference_value: float, metric_direction: str) -> pd.DataFrame:
+    if metric_direction == "higher":
+        return matrix - reference_value
+    if metric_direction == "lower":
+        return reference_value - matrix
+    raise ValueError(f"Unsupported metric_direction: {metric_direction!r}")
+
+
 def _subject_time_effects_and_conditions(
     csv_paths: list[Path],
     *,
@@ -96,7 +121,8 @@ def _subject_time_effects_and_conditions(
     observation_csv_paths: list[Path] | None,
     observation_subject_column: str | None,
     ece_bins: int,
-) -> tuple[pd.DataFrame, dict[str, str]]:
+    metric_direction: str,
+) -> tuple[pd.DataFrame, dict[str, str], str]:
     all_results = read_time_decode_results(csv_paths)
     if metric not in all_results.columns:
         raise ValueError(f"Metric column '{metric}' not found in results.")
@@ -109,6 +135,7 @@ def _subject_time_effects_and_conditions(
     filters = _condition_filters(decoder, emission_mode)
     results = _filter_results(all_results, filters)
     condition_values = _single_condition_values(results, filters)
+    resolved_direction = _resolve_metric_direction(metric, metric_direction)
 
     observations = None
     if observation_csv_paths is not None:
@@ -129,7 +156,7 @@ def _subject_time_effects_and_conditions(
     matrix = subject_time.pivot(index="subject", columns="time", values=metric).sort_index(axis=0).sort_index(axis=1)
     if matrix.isna().any().any():
         raise ValueError("All subjects must have results for the same time points.")
-    return matrix - chance, condition_values
+    return _signed_effects(matrix, reference_value=chance, metric_direction=resolved_direction), condition_values, resolved_direction
 
 
 def subject_time_effects(
@@ -142,14 +169,17 @@ def subject_time_effects(
     observation_csv_paths: list[Path] | None = None,
     observation_subject_column: str | None = None,
     ece_bins: int = DEFAULT_ECE_BINS,
+    metric_direction: str = "auto",
 ) -> pd.DataFrame:
-    """Return a subject-by-time matrix of fold-size-weighted effects against chance.
+    """Return a subject-by-time matrix of signed effects against a reference value.
 
-    ECE inference uses pooled held-out probability observations. Pass
-    ``observation_csv_paths`` when ``metric='ece'``; fold-averaged ECE is not
-    used for inferential tests.
+    The sign is chosen so positive values always mean "better than the reference":
+    higher-is-better metrics use ``metric - chance``, while lower-is-better
+    metrics use ``chance - metric``. ECE inference uses pooled held-out
+    probability observations. Pass ``observation_csv_paths`` when ``metric='ece'``;
+    fold-averaged ECE is not used for inferential tests.
     """
-    effects, _ = _subject_time_effects_and_conditions(
+    effects, _, _ = _subject_time_effects_and_conditions(
         csv_paths,
         metric=metric,
         chance=chance,
@@ -158,6 +188,7 @@ def subject_time_effects(
         observation_csv_paths=observation_csv_paths,
         observation_subject_column=observation_subject_column,
         ece_bins=ece_bins,
+        metric_direction=metric_direction,
     )
     return effects
 
@@ -225,18 +256,20 @@ def sign_flip_time_inference(
     observation_csv_paths: list[Path] | None = None,
     observation_subject_column: str | None = None,
     ece_bins: int = DEFAULT_ECE_BINS,
+    metric_direction: str = "auto",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Run one-sided subject-level sign-flip inference over time.
 
     The test uses fold-size-weighted subject time courses as independent
-    samples. Pointwise p-values test whether the metric is above ``chance`` at
-    each time point. Cluster p-values use a max-cluster-mass correction over
-    contiguous above-threshold time points.
+    samples. Pointwise p-values test whether the metric is better than the
+    reference value ``chance``. Higher-is-better metrics use ``metric - chance``;
+    lower-is-better metrics use ``chance - metric``. Cluster p-values use a
+    max-cluster-mass correction over contiguous positive-effect time points.
     """
     if not 0 < cluster_alpha < 1:
         raise ValueError("cluster_alpha must be between 0 and 1.")
 
-    effects, condition_values = _subject_time_effects_and_conditions(
+    effects, condition_values, resolved_direction = _subject_time_effects_and_conditions(
         csv_paths,
         metric=metric,
         chance=chance,
@@ -245,6 +278,7 @@ def sign_flip_time_inference(
         observation_csv_paths=observation_csv_paths,
         observation_subject_column=observation_subject_column,
         ece_bins=ece_bins,
+        metric_direction=metric_direction,
     )
     effect_values = effects.to_numpy(dtype=float)
     times = effects.columns.to_numpy(dtype=float)
@@ -290,7 +324,9 @@ def sign_flip_time_inference(
         {
             "time": times,
             "n_subjects": n_subjects,
-            f"{metric}_mean": observed_effect + chance,
+            "metric_direction": resolved_direction,
+            "reference_value": chance,
+            f"{metric}_mean": observed_effect + chance if resolved_direction == "higher" else chance - observed_effect,
             "effect_mean": observed_effect,
             "statistic": observed_statistic,
             "pointwise_p": pointwise_p,
@@ -312,6 +348,8 @@ def sign_flip_time_inference(
             "cluster_p",
         ],
     )
+    cluster_table["metric_direction"] = resolved_direction
+    cluster_table["reference_value"] = chance
     return _prepend_condition_columns(time_table, condition_values), _prepend_condition_columns(cluster_table, condition_values)
 
 
@@ -319,7 +357,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run subject-level sign-flip inference for time-resolved decoding results.")
     parser.add_argument("csv", nargs="+", help="Subject result CSVs or glob patterns.")
     parser.add_argument("--metric", default="accuracy")
-    parser.add_argument("--chance", type=float, default=0.5)
+    parser.add_argument("--chance", type=float, default=0.5, help="Reference value for the selected metric.")
+    parser.add_argument("--metric-direction", choices=METRIC_DIRECTION_CHOICES, default="auto", help="Whether larger or smaller metric values are better; auto knows accuracy/log_loss/brier/ece.")
     parser.add_argument("--n-permutations", type=int, default=10_000)
     parser.add_argument("--random-state", type=int, default=13)
     parser.add_argument("--cluster-alpha", type=float, default=0.05)
@@ -344,6 +383,7 @@ def main() -> None:
         observation_csv_paths=_expand_paths(args.observations) if args.observations else None,
         observation_subject_column=args.observation_subject_column,
         ece_bins=args.ece_bins,
+        metric_direction=args.metric_direction,
     )
     args.out_time.parent.mkdir(parents=True, exist_ok=True)
     args.out_clusters.parent.mkdir(parents=True, exist_ok=True)
