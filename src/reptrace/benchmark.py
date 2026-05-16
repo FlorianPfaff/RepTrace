@@ -247,7 +247,7 @@ def run_benchmark_manifest(
 
     if aggregate_out is None:
         aggregate_out = out_dir / "summary.csv"
-    aggregate = aggregate_time_decode_csvs(result_csvs, out_path=aggregate_out)
+    aggregate = aggregate_time_decode_csvs(result_csvs, out_path=aggregate_out, observation_paths=observation_csvs or None)
     aggregate_path: Path | None = aggregate_out
 
     plot_path: Path | None = None
