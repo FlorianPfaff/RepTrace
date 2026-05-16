@@ -6,9 +6,13 @@ from pathlib import Path
 
 import pandas as pd
 
-from reptrace.results import read_time_decode_results
+from reptrace.results import SUMMARY_GROUP_COLUMNS, mean_across_folds, read_time_decode_results
 
-COMPARISON_GROUP_COLUMNS = ("decoder", "emission_mode")
+COMPARISON_GROUP_COLUMNS = SUMMARY_GROUP_COLUMNS
+SUBJECT_TABLE_LABELS = {
+    "decoder": "Decoder",
+    "emission_mode": "Emission mode",
+}
 
 
 def _window_mean(frame: pd.DataFrame, column: str, start: float, stop: float) -> float:
@@ -24,6 +28,75 @@ def _format_float(value: float, digits: int = 3) -> str:
 
 def _comparison_group_columns(frame: pd.DataFrame) -> list[str]:
     return [column for column in COMPARISON_GROUP_COLUMNS if column in frame.columns]
+
+
+def _raw_csv_has_column(csv_paths: list[Path], column: str) -> bool:
+    return any(column in pd.read_csv(csv_path, nrows=0).columns for csv_path in csv_paths)
+
+
+def _iter_groups(frame: pd.DataFrame, group_columns: list[str]):
+    grouper = group_columns[0] if len(group_columns) == 1 else group_columns
+    yield from frame.groupby(grouper, sort=True)
+
+
+def _active_subject_group_columns(results: pd.DataFrame, csv_paths: list[Path]) -> list[str]:
+    columns = _comparison_group_columns(results)
+    if "emission_mode" in columns and not _raw_csv_has_column(csv_paths, "emission_mode"):
+        columns = [column for column in columns if column != "emission_mode"]
+    if any(results[column].nunique(dropna=False) > 1 for column in columns):
+        return columns
+    return []
+
+
+def _filter_subject_summary_to_summary_groups(subject_summary: pd.DataFrame, summary: pd.DataFrame) -> pd.DataFrame:
+    """Keep subject rows matching explicit singleton decoder/emission groups in summary."""
+    filtered = subject_summary
+    for column in _comparison_group_columns(summary):
+        if column not in filtered.columns:
+            continue
+        values = summary[column].dropna().astype(str).unique()
+        if len(values) != 1:
+            continue
+        filtered = filtered[filtered[column].astype(str) == values[0]]
+    if filtered.empty and not subject_summary.empty:
+        raise ValueError("Subject CSVs contain no rows matching the summary CSV decoder/emission condition.")
+    return filtered.reset_index(drop=True)
+
+
+def _append_subject_time_decode_section(
+    lines: list[str],
+    subject_csvs: list[Path],
+    *,
+    effect_window: tuple[float, float],
+    summary: pd.DataFrame | None = None,
+) -> None:
+    subject_summary = summarize_subject_time_decode(subject_csvs, effect_window=effect_window)
+    if summary is not None:
+        subject_summary = _filter_subject_summary_to_summary_groups(subject_summary, summary)
+    subject_group_columns = _comparison_group_columns(subject_summary)
+    group_headers = [SUBJECT_TABLE_LABELS.get(column, column.replace("_", " ").title()) for column in subject_group_columns]
+    headers = [*group_headers, "Subject", "Peak time (s)", "Peak accuracy", "Effect-window mean accuracy"]
+    alignments = [*("---" for _ in group_headers), "---", "---:", "---:", "---:"]
+
+    lines.extend(
+        [
+            "",
+            "## Subjects",
+            "",
+            f"| {' | '.join(headers)} |",
+            f"| {' | '.join(alignments)} |",
+        ]
+    )
+    for row in subject_summary.itertuples(index=False):
+        group_values = [str(getattr(row, column)) for column in subject_group_columns]
+        values = [
+            *group_values,
+            str(row.subject),
+            _format_float(row.peak_time),
+            _format_float(row.peak_accuracy),
+            _format_float(row.effect_accuracy_mean),
+        ]
+        lines.append(f"| {' | '.join(values)} |")
 
 
 def summarize_aggregate_time_decode(
@@ -65,25 +138,26 @@ def summarize_subject_time_decode(
 ) -> pd.DataFrame:
     """Summarize subject-level peak and effect-window decoding accuracy."""
     results = read_time_decode_results(csv_paths)
-    by_subject_time = (
-        results.groupby(["subject", "time"], as_index=False)["accuracy"]
-        .mean()
-        .sort_values(["subject", "time"])
-    )
+    group_columns = _active_subject_group_columns(results, csv_paths)
+    subject_time_keys = [*group_columns, "subject", "time"]
+    by_subject_time = mean_across_folds(results, subject_time_keys).sort_values(subject_time_keys)
 
     rows = []
-    for subject, subject_frame in by_subject_time.groupby("subject", sort=True):
+    subject_keys = [*group_columns, "subject"]
+    for keys, subject_frame in _iter_groups(by_subject_time, subject_keys):
+        key_values = keys if isinstance(keys, tuple) else (keys,)
+        identity = dict(zip(subject_keys, key_values, strict=True))
         peak = subject_frame.loc[subject_frame["accuracy"].idxmax()]
         rows.append(
             {
-                "subject": subject,
+                **identity,
                 "peak_time": float(peak["time"]),
                 "peak_accuracy": float(peak["accuracy"]),
                 "effect_accuracy_mean": _window_mean(subject_frame, "accuracy", *effect_window),
             }
         )
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows).sort_values(subject_keys).reset_index(drop=True)
 
 
 def summarize_decoder_comparison(
@@ -98,7 +172,7 @@ def summarize_decoder_comparison(
         raise ValueError("Summary must contain a 'decoder' column for decoder comparison.")
 
     rows = []
-    for keys, decoder_frame in summary.groupby(group_columns, sort=True):
+    for keys, decoder_frame in _iter_groups(summary, group_columns):
         key_values = keys if isinstance(keys, tuple) else (keys,)
         group_values = dict(zip(group_columns, key_values, strict=True))
         peak = decoder_frame.loc[decoder_frame["accuracy_mean"].idxmax()]
@@ -169,6 +243,8 @@ def build_time_decode_report(
                 f"{_format_float(row.baseline_accuracy_mean)} | {_format_float(row.effect_accuracy_mean)} | {_format_float(row.effect_minus_baseline)} | "
                 f"{_format_float(row.peak_log_loss)} | {_format_float(row.peak_brier)} | {_format_float(row.peak_ece)} |"
             )
+        if subject_csvs:
+            _append_subject_time_decode_section(lines, subject_csvs, effect_window=effect_window)
         lines.append("")
         return "\n".join(lines)
 
@@ -204,20 +280,7 @@ def build_time_decode_report(
     ]
 
     if subject_csvs:
-        subject_summary = summarize_subject_time_decode(subject_csvs, effect_window=effect_window)
-        lines.extend(
-            [
-                "",
-                "## Subjects",
-                "",
-                "| Subject | Peak time (s) | Peak accuracy | Effect-window mean accuracy |",
-                "| --- | ---: | ---: | ---: |",
-            ]
-        )
-        for row in subject_summary.itertuples(index=False):
-            lines.append(
-                f"| {row.subject} | {_format_float(row.peak_time)} | {_format_float(row.peak_accuracy)} | {_format_float(row.effect_accuracy_mean)} |"
-            )
+        _append_subject_time_decode_section(lines, subject_csvs, effect_window=effect_window, summary=summary)
 
     lines.append("")
     return "\n".join(lines)
