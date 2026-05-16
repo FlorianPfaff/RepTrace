@@ -9,6 +9,15 @@ import pandas as pd
 
 EPSILON = 1e-12
 MODEL_GROUP_COLUMNS = ("decoder", "emission_mode")
+SEQUENCE_KEY_COLUMN_CANDIDATES = (
+    "source_path",
+    "source_file",
+    "subject",
+    "session",
+    "run",
+    "fold",
+    "sequence_id",
+)
 
 
 def _expand_paths(patterns: list[str]) -> list[Path]:
@@ -71,7 +80,16 @@ def read_probability_observations(csv_paths: list[Path]) -> pd.DataFrame:
         frame["subject"] = frame["subject"].astype(str)
         frame["decoder"] = frame["decoder"].astype(str)
         frame["emission_mode"] = frame["emission_mode"].astype(str)
-        frame["source_file"] = csv_path.name
+        if "source_file" not in frame.columns:
+            frame["source_file"] = csv_path.name
+        else:
+            frame["source_file"] = frame["source_file"].fillna(csv_path.name)
+        if "source_path" not in frame.columns:
+            frame["source_path"] = str(csv_path)
+        else:
+            frame["source_path"] = frame["source_path"].fillna(str(csv_path))
+        frame["source_file"] = frame["source_file"].astype(str)
+        frame["source_path"] = frame["source_path"].astype(str)
         frames.append(frame)
     return pd.concat(frames, ignore_index=True)
 
@@ -89,8 +107,41 @@ def _filter_time_window(frame: pd.DataFrame, time_window: tuple[float, float] | 
     return frame.loc[(frame["time"] >= start) & (frame["time"] <= stop)].copy()
 
 
+def sequence_key_columns(frame: pd.DataFrame, *, require_sequence_id: bool = True) -> list[str]:
+    """Return columns that identify one probability/state sequence.
+
+    ``source_path``/``source_file`` and session-level columns are part of the
+    sequence identity so reused ``sequence_id`` values from different input
+    files, sessions, or runs are not silently concatenated.
+    """
+
+    key_columns = [column for column in SEQUENCE_KEY_COLUMN_CANDIDATES if column in frame.columns]
+    if require_sequence_id and "sequence_id" not in frame.columns:
+        raise ValueError("Observation rows must contain sequence_id or sample_index.")
+    if not key_columns:
+        raise ValueError("Observation rows must contain at least one sequence key column.")
+    return key_columns
+
+
+def validate_unique_sequence_times(frame: pd.DataFrame, key_columns: list[str]) -> None:
+    """Fail fast when a sequence identity contains duplicate time bins."""
+
+    if frame.empty or "time" not in frame.columns:
+        return
+    identity_columns = [*key_columns, "time"]
+    duplicate_mask = frame.duplicated(identity_columns, keep=False)
+    if not duplicate_mask.any():
+        return
+    examples = frame.loc[duplicate_mask, identity_columns].drop_duplicates().head(5).to_dict("records")
+    raise ValueError(
+        "Duplicate time rows found within a sequence identity. "
+        "Include source_path/source_file/session/run in the sequence key or deduplicate rows before analysis. "
+        f"Examples: {examples}"
+    )
+
+
 def _sequence_key_columns(frame: pd.DataFrame) -> list[str]:
-    return [column for column in ("subject", "fold", "sequence_id") if column in frame.columns]
+    return sequence_key_columns(frame)
 
 
 def _model_group_columns(frame: pd.DataFrame) -> list[str]:
@@ -99,8 +150,9 @@ def _model_group_columns(frame: pd.DataFrame) -> list[str]:
 
 def _sequences_from_frame(frame: pd.DataFrame, prob_columns: list[str]) -> list[np.ndarray]:
     key_columns = _sequence_key_columns(frame)
+    validate_unique_sequence_times(frame, key_columns)
     sequences = []
-    for _, sequence_frame in frame.sort_values([*key_columns, "time"]).groupby(key_columns, sort=True):
+    for _, sequence_frame in frame.sort_values([*key_columns, "time"]).groupby(key_columns, sort=True, dropna=False):
         probabilities = _normalize_probabilities(sequence_frame[prob_columns].to_numpy())
         if len(probabilities) > 1:
             sequences.append(probabilities)
@@ -304,8 +356,9 @@ def _viterbi_path(probabilities: np.ndarray, stay_probability: float) -> np.ndar
 def build_state_trace(frame: pd.DataFrame, *, stay_probability: float, class_names: list[str], prob_columns: list[str]) -> pd.DataFrame:
     """Decode posterior and Viterbi state traces for observed probability sequences."""
     key_columns = _sequence_key_columns(frame)
+    validate_unique_sequence_times(frame, key_columns)
     rows = []
-    for key, sequence_frame in frame.sort_values([*key_columns, "time"]).groupby(key_columns, sort=True):
+    for key, sequence_frame in frame.sort_values([*key_columns, "time"]).groupby(key_columns, sort=True, dropna=False):
         key_values = key if isinstance(key, tuple) else (key,)
         metadata = dict(zip(key_columns, key_values, strict=True))
         probabilities = _normalize_probabilities(sequence_frame[prob_columns].to_numpy())
@@ -322,7 +375,7 @@ def build_state_trace(frame: pd.DataFrame, *, stay_probability: float, class_nam
                 "viterbi_class": class_names[state],
                 "viterbi_posterior": float(posterior[row_index, state]),
             }
-            for optional_column in ("source_file", "sample_index", "true_class", "predicted_class"):
+            for optional_column in ("source_path", "source_file", "session", "run", "sample_index", "true_class", "predicted_class"):
                 if optional_column in observation:
                     row[optional_column] = observation[optional_column]
             for state_index, class_name in enumerate(class_names):
