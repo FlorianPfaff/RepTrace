@@ -6,6 +6,11 @@ permissions:
 on:
   workflow_dispatch:
     inputs:
+      publish_to_paper_repo:
+        description: "Dispatch paper-repo build-results workflow to fetch this raw artifact"
+        required: true
+        type: boolean
+        default: false
       data_root:
         description: "Directory containing sub-*_epo.fif and sub-*_events.csv files"
         required: true
@@ -19,9 +24,9 @@ on:
         required: true
         default: "results/paper2_temporal_state_inference"
       paper_export_dir:
-        description: "Optional paper-repo directory for compact artifacts"
+        description: "Optional local export directory for compact raw artifacts"
         required: false
-        default: "../2026-05-RepTrace-Paper/results/paper2_temporal_state_inference"
+        default: ""
       decoders:
         description: "Space-separated decoder list"
         required: true
@@ -197,7 +202,6 @@ jobs:
           name: nod-paper2-temporal-${{ github.run_id }}
           path: |
             ${{ inputs.output_dir }}/paper2_summary.csv
-            ${{ inputs.output_dir }}/paper2_stage_reliability.png
             ${{ inputs.output_dir }}/paper2_evidence.md
             ${{ inputs.output_dir }}/paper2_commands.md
             ${{ inputs.output_dir }}/temporal_model_all.csv
@@ -206,7 +210,6 @@ jobs:
             ${{ inputs.output_dir }}/semantic_stages_all.csv
             ${{ inputs.output_dir }}/*/validation.csv
             ${{ inputs.output_dir }}/*/summary.csv
-            ${{ inputs.output_dir }}/*/summary.png
             ${{ inputs.output_dir }}/*/temporal_model.csv
             ${{ inputs.output_dir }}/*/emission_compare.csv
             ${{ inputs.output_dir }}/*/emission_compare.md
@@ -214,3 +217,46 @@ jobs:
             ${{ inputs.output_dir }}/*/semantic_stages.csv
             ${{ inputs.output_dir }}/*/semantic_stages.md
           if-no-files-found: warn
+
+  dispatch-paper-results:
+    name: Dispatch paper repository build
+    needs: nod-paper2-temporal
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_to_paper_repo == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch paper repository build-results workflow
+        env:
+          PAPER_REPO_TOKEN: ${{ secrets.PAPER_REPO_TOKEN }}
+          PAPER_REPO: FlorianPfaff/RepTrace-Paper
+          SOURCE_REPO: IPS-Stuttgart/RepTrace
+          SOURCE_RUN_ID: ${{ github.run_id }}
+          ARTIFACT_NAME: nod-paper2-temporal-${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${PAPER_REPO_TOKEN:-}" ]; then
+            echo "::warning::publish_to_paper_repo=true but PAPER_REPO_TOKEN is not configured; skipping paper workflow dispatch"
+            exit 0
+          fi
+          payload=$(python - <<'PY'
+          import json
+          import os
+
+          print(json.dumps({
+              "ref": "main",
+              "inputs": {
+                  "source_repo": os.environ["SOURCE_REPO"],
+                  "source_run_id": os.environ["SOURCE_RUN_ID"],
+                  "artifact_name": os.environ["ARTIFACT_NAME"],
+              },
+          }))
+          PY
+          )
+
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer ${PAPER_REPO_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${PAPER_REPO}/actions/workflows/build-results.yml/dispatches" \
+            -d "$payload"
