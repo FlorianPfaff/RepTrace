@@ -8,7 +8,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from reptrace.results import SUMMARY_GROUP_COLUMNS, mean_across_folds, read_time_decode_results
+from reptrace.results import (
+    DEFAULT_ECE_BINS,
+    SUMMARY_GROUP_COLUMNS,
+    read_time_decode_observations,
+    read_time_decode_results,
+    subject_time_metrics,
+)
 
 
 METRIC_DIRECTIONS = {
@@ -49,9 +55,7 @@ def _normalise_emission_mode(frame: pd.DataFrame) -> pd.DataFrame:
     normalised = frame.copy()
     if "emission_mode" not in normalised.columns:
         normalised["emission_mode"] = PAIRING_GROUP_DEFAULTS["emission_mode"]
-    normalised["emission_mode"] = normalised["emission_mode"].fillna(
-        PAIRING_GROUP_DEFAULTS["emission_mode"]
-    ).astype(str)
+    normalised["emission_mode"] = normalised["emission_mode"].fillna(PAIRING_GROUP_DEFAULTS["emission_mode"]).astype(str)
     return normalised
 
 
@@ -67,36 +71,60 @@ def subject_decoder_metrics(
     chance: float = 0.5,
     baseline_window: tuple[float, float] = (-0.1, 0.0),
     effect_window: tuple[float, float] = (0.1, 0.8),
+    observation_csv_paths: list[Path] | None = None,
+    observation_subject_column: str | None = None,
+    ece_bins: int = DEFAULT_ECE_BINS,
 ) -> pd.DataFrame:
-    """Return one row per subject, decoder, and emission mode with paired-test metrics."""
+    """Return one row per subject, decoder, and emission mode with paired-test metrics.
+
+    ``effect_ece`` is included only when probability observations are supplied,
+    because ECE is nonlinear and must be recomputed from pooled held-out
+    probabilities rather than averaged across folds.
+    """
     results = read_time_decode_results(csv_paths)
     if "decoder" not in results.columns:
         raise ValueError("Subject CSVs must contain a 'decoder' column.")
     results = _normalise_emission_mode(results)
 
+    observations = None
+    metric_columns = ["accuracy", "log_loss", "brier"]
+    if observation_csv_paths is not None:
+        observations = read_time_decode_observations(
+            observation_csv_paths,
+            subject_column=observation_subject_column,
+            result_csv_paths=csv_paths,
+            results=results,
+        )
+        metric_columns.append("ece")
+
     group_columns = [column for column in SUMMARY_GROUP_COLUMNS if column in results.columns]
     subject_time_keys = [*group_columns, "subject", "time"]
     subject_group_keys = [*group_columns, "subject"]
-    subject_time = mean_across_folds(results, subject_time_keys).sort_values(subject_time_keys)
+    subject_time = subject_time_metrics(
+        results,
+        observations=observations,
+        metric_columns=metric_columns,
+        ece_bins=ece_bins,
+    ).sort_values(subject_time_keys)
 
     rows = []
     for key, frame in subject_time.groupby(subject_group_keys, sort=True):
         group_values = dict(zip(subject_group_keys, _as_tuple(key)))
         baseline_accuracy = _window_mean(frame, "accuracy", *baseline_window)
         effect_accuracy = _window_mean(frame, "accuracy", *effect_window)
-        rows.append(
-            {
-                **{column: str(group_values[column]) for column in group_columns},
-                "subject": str(group_values["subject"]),
-                "baseline_accuracy": baseline_accuracy,
-                "baseline_abs_delta": abs(baseline_accuracy - chance),
-                "effect_accuracy": effect_accuracy,
-                "effect_minus_baseline": effect_accuracy - baseline_accuracy,
-                "effect_log_loss": _window_mean(frame, "log_loss", *effect_window),
-                "effect_brier": _window_mean(frame, "brier", *effect_window),
-                "effect_ece": _window_mean(frame, "ece", *effect_window),
-            }
-        )
+        row = {
+            **{column: str(group_values[column]) for column in group_columns},
+            "subject": str(group_values["subject"]),
+            "baseline_accuracy": baseline_accuracy,
+            "baseline_abs_delta": abs(baseline_accuracy - chance),
+            "effect_accuracy": effect_accuracy,
+            "effect_minus_baseline": effect_accuracy - baseline_accuracy,
+            "effect_log_loss": _window_mean(frame, "log_loss", *effect_window),
+            "effect_brier": _window_mean(frame, "brier", *effect_window),
+        }
+        if "ece" in frame.columns:
+            row["effect_ece"] = _window_mean(frame, "ece", *effect_window)
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
@@ -130,7 +158,7 @@ def sign_flip_p_value(
 def paired_decoder_statistics(
     subject_metrics: pd.DataFrame,
     *,
-    metrics: tuple[str, ...] = tuple(METRIC_DIRECTIONS),
+    metrics: tuple[str, ...] | None = None,
     n_permutations: int = 10_000,
     random_state: int = 13,
 ) -> pd.DataFrame:
@@ -138,7 +166,14 @@ def paired_decoder_statistics(
 
     Decoder comparisons are stratified by emission mode so calibrated and
     uncalibrated subject metrics are never merged into the same paired test.
+    When ``metrics`` is omitted, only metrics present in ``subject_metrics`` are
+    tested; this prevents fold-averaged ECE from being tested by default.
     """
+    if metrics is None:
+        metrics = tuple(metric for metric in METRIC_DIRECTIONS if metric in subject_metrics.columns)
+    if not metrics:
+        raise ValueError("No paired-statistic metric columns are available.")
+
     required = {"decoder", "subject", *metrics}
     missing = sorted(required.difference(subject_metrics.columns))
     if missing:
@@ -245,6 +280,9 @@ def main() -> None:
     parser.add_argument("--chance", type=float, default=0.5)
     parser.add_argument("--baseline-window", type=float, nargs=2, default=(-0.1, 0.0), metavar=("START", "STOP"))
     parser.add_argument("--effect-window", type=float, nargs=2, default=(0.1, 0.8), metavar=("START", "STOP"))
+    parser.add_argument("--observations", nargs="+", help="Probability-observation CSVs used for exact effect_ece.")
+    parser.add_argument("--observation-subject-column", help="Subject column for --observations.")
+    parser.add_argument("--ece-bins", type=int, default=DEFAULT_ECE_BINS, help="Number of bins for exact observation-level ECE.")
     parser.add_argument("--n-permutations", type=int, default=10_000)
     parser.add_argument("--random-state", type=int, default=13)
     args = parser.parse_args()
@@ -256,23 +294,17 @@ def main() -> None:
         chance=args.chance,
         baseline_window=baseline_window,
         effect_window=effect_window,
+        observation_csv_paths=_expand_paths(args.observations) if args.observations else None,
+        observation_subject_column=args.observation_subject_column,
+        ece_bins=args.ece_bins,
     )
-    statistics = paired_decoder_statistics(
-        subject_metrics,
-        n_permutations=args.n_permutations,
-        random_state=args.random_state,
-    )
+    statistics = paired_decoder_statistics(subject_metrics, n_permutations=args.n_permutations, random_state=args.random_state)
     if args.out_csv is not None:
         args.out_csv.parent.mkdir(parents=True, exist_ok=True)
         statistics.to_csv(args.out_csv, index=False)
         print(f"Wrote paired statistics CSV: {args.out_csv}")
 
-    report = build_paired_stats_report(
-        statistics,
-        baseline_window=baseline_window,
-        effect_window=effect_window,
-        chance=args.chance,
-    )
+    report = build_paired_stats_report(statistics, baseline_window=baseline_window, effect_window=effect_window, chance=args.chance)
     if args.out_report is not None:
         args.out_report.parent.mkdir(parents=True, exist_ok=True)
         args.out_report.write_text(report, encoding="utf-8")
