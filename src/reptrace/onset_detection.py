@@ -7,7 +7,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from reptrace.temporal_model import probability_columns, read_probability_observations
+from reptrace.temporal_model import (
+    SEQUENCE_KEY_COLUMN_CANDIDATES,
+    probability_columns,
+    read_probability_observations,
+    sequence_key_columns,
+    validate_unique_sequence_times,
+)
 
 DEFAULT_THRESHOLD_WINDOW = (-0.35, -0.05)
 DEFAULT_DETECTION_WINDOW = (0.0, float("inf"))
@@ -32,10 +38,7 @@ def _group_columns(frame: pd.DataFrame) -> list[str]:
 
 
 def _sequence_columns(frame: pd.DataFrame) -> list[str]:
-    columns = [column for column in ("subject", "fold", "sequence_id") if column in frame.columns]
-    if "sequence_id" not in columns:
-        raise ValueError("Observation rows must contain sequence_id or sample_index.")
-    return columns
+    return sequence_key_columns(frame)
 
 
 def _window_mask(frame: pd.DataFrame, window: tuple[float, float]) -> pd.Series:
@@ -210,7 +213,8 @@ def _baseline_run_null_scores(
     scored = baseline.copy()
     scored["_onset_score"] = _score_values(scored, score_column)
     rows = []
-    for _, sequence_frame in scored.groupby(sequence_columns, sort=True):
+    validate_unique_sequence_times(scored, sequence_columns)
+    for _, sequence_frame in scored.groupby(sequence_columns, sort=True, dropna=False):
         candidates = _valid_run_score_candidates(
             sequence_frame,
             min_consecutive=min_consecutive,
@@ -223,12 +227,10 @@ def _baseline_run_null_scores(
 
 
 def _sequence_identity(row: pd.Series) -> dict:
-    identity = {
-        "sequence_id": row["sequence_id"],
-    }
-    for optional_column in ("sample_index", "group", "source_file"):
-        if optional_column in row:
-            identity[optional_column] = row[optional_column]
+    identity = {}
+    for identity_column in (*SEQUENCE_KEY_COLUMN_CANDIDATES, "sample_index", "group"):
+        if identity_column in row:
+            identity[identity_column] = row[identity_column]
     for truth_column in ("true_label", "true_class"):
         if truth_column in row:
             identity[truth_column] = row[truth_column]
@@ -565,7 +567,8 @@ def _sequence_crossing_rate(frame: pd.DataFrame, sequence_columns: list[str]) ->
         return 0, np.nan
     sequence_count = 0
     crossing_count = 0
-    for _, sequence_frame in frame.groupby(sequence_columns, sort=True):
+    validate_unique_sequence_times(frame, sequence_columns)
+    for _, sequence_frame in frame.groupby(sequence_columns, sort=True, dropna=False):
         sequence_count += 1
         crossing_count += bool(sequence_frame["above_threshold"].any())
     return crossing_count, crossing_count / sequence_count if sequence_count else np.nan
@@ -699,8 +702,9 @@ def detect_onsets(
                 require_stable_prediction=require_stable_prediction,
             )
         )
+        validate_unique_sequence_times(group_frame, sequence_columns)
         sorted_group = group_frame.sort_values([*sequence_columns, "time"])
-        for _, sequence_frame in sorted_group.groupby(sequence_columns, sort=True):
+        for _, sequence_frame in sorted_group.groupby(sequence_columns, sort=True, dropna=False):
             candidates = sequence_frame
             if detection_start is not None:
                 candidates = candidates.loc[candidates["time"] >= detection_start]
