@@ -42,7 +42,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install dependencies
         shell: cmd
@@ -166,7 +166,7 @@ jobs:
           )
 
       - name: Upload compact result artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: nod-animate-decoders-all-${{ github.run_id }}

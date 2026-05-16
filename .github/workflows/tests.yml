@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -51,7 +51,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -71,7 +71,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/src
 
       - name: Upload test result artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.python-version }}-test-results
           path: junit_test_results.xml
@@ -82,12 +82,12 @@ jobs:
     needs: test
     steps:
       - name: Check out RepTrace
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           path: RepTrace
 
       - name: Check out PyMEGDec
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           repository: IPS-Stuttgart/PyMEGDec
           path: PyMEGDec

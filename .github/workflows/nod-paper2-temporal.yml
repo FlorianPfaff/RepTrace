@@ -50,7 +50,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Install dependencies
         shell: bash
@@ -191,7 +191,7 @@ jobs:
           "${POETRY_RUN[@]}" run python -m reptrace.temporal_state_workflow "${WORKFLOW_ARGS[@]}"
 
       - name: Upload compact Paper 2 artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: nod-paper2-temporal-${{ github.run_id }}
