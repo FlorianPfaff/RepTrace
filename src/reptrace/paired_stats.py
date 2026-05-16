@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from reptrace.results import read_time_decode_results
+from reptrace.results import SUMMARY_GROUP_COLUMNS, mean_across_folds, read_time_decode_results
 
 
 METRIC_DIRECTIONS = {
@@ -19,6 +19,7 @@ METRIC_DIRECTIONS = {
     "effect_brier": "lower",
     "effect_ece": "lower",
 }
+PAIRING_GROUP_DEFAULTS = {"emission_mode": "calibrated"}
 
 
 def _expand_paths(patterns: list[str]) -> list[Path]:
@@ -43,6 +44,23 @@ def _format_float(value: float, digits: int = 3) -> str:
     return f"{value:.{digits}f}"
 
 
+def _normalise_emission_mode(frame: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy with an explicit, string-valued emission-mode column."""
+    normalised = frame.copy()
+    if "emission_mode" not in normalised.columns:
+        normalised["emission_mode"] = PAIRING_GROUP_DEFAULTS["emission_mode"]
+    normalised["emission_mode"] = normalised["emission_mode"].fillna(
+        PAIRING_GROUP_DEFAULTS["emission_mode"]
+    ).astype(str)
+    return normalised
+
+
+def _as_tuple(value: object) -> tuple[object, ...]:
+    if isinstance(value, tuple):
+        return value
+    return (value,)
+
+
 def subject_decoder_metrics(
     csv_paths: list[Path],
     *,
@@ -50,24 +68,26 @@ def subject_decoder_metrics(
     baseline_window: tuple[float, float] = (-0.1, 0.0),
     effect_window: tuple[float, float] = (0.1, 0.8),
 ) -> pd.DataFrame:
-    """Return one row per subject and decoder with paired-test metrics."""
+    """Return one row per subject, decoder, and emission mode with paired-test metrics."""
     results = read_time_decode_results(csv_paths)
     if "decoder" not in results.columns:
         raise ValueError("Subject CSVs must contain a 'decoder' column.")
+    results = _normalise_emission_mode(results)
 
-    subject_time = (
-        results.groupby(["decoder", "subject", "time"], as_index=False)[["accuracy", "log_loss", "brier", "ece"]]
-        .mean()
-        .sort_values(["decoder", "subject", "time"])
-    )
+    group_columns = [column for column in SUMMARY_GROUP_COLUMNS if column in results.columns]
+    subject_time_keys = [*group_columns, "subject", "time"]
+    subject_group_keys = [*group_columns, "subject"]
+    subject_time = mean_across_folds(results, subject_time_keys).sort_values(subject_time_keys)
+
     rows = []
-    for (decoder, subject), frame in subject_time.groupby(["decoder", "subject"], sort=True):
+    for key, frame in subject_time.groupby(subject_group_keys, sort=True):
+        group_values = dict(zip(subject_group_keys, _as_tuple(key)))
         baseline_accuracy = _window_mean(frame, "accuracy", *baseline_window)
         effect_accuracy = _window_mean(frame, "accuracy", *effect_window)
         rows.append(
             {
-                "decoder": str(decoder),
-                "subject": str(subject),
+                **{column: str(group_values[column]) for column in group_columns},
+                "subject": str(group_values["subject"]),
                 "baseline_accuracy": baseline_accuracy,
                 "baseline_abs_delta": abs(baseline_accuracy - chance),
                 "effect_accuracy": effect_accuracy,
@@ -114,53 +134,77 @@ def paired_decoder_statistics(
     n_permutations: int = 10_000,
     random_state: int = 13,
 ) -> pd.DataFrame:
-    """Compare decoders with subject-level paired sign-flip tests."""
+    """Compare decoders with subject-level paired sign-flip tests.
+
+    Decoder comparisons are stratified by emission mode so calibrated and
+    uncalibrated subject metrics are never merged into the same paired test.
+    """
     required = {"decoder", "subject", *metrics}
     missing = sorted(required.difference(subject_metrics.columns))
     if missing:
         raise ValueError(f"Subject metrics are missing required columns: {missing}")
 
-    decoders = sorted(subject_metrics["decoder"].unique())
-    if len(decoders) < 2:
-        raise ValueError("Need at least two decoders for paired comparison.")
+    subject_metrics = _normalise_emission_mode(subject_metrics)
+    subject_metrics["decoder"] = subject_metrics["decoder"].astype(str)
+    subject_metrics["subject"] = subject_metrics["subject"].astype(str)
+    pairing_columns = ["emission_mode"]
+    identity_columns = [*pairing_columns, "decoder", "subject"]
+    duplicates = subject_metrics.duplicated(identity_columns, keep=False)
+    if duplicates.any():
+        duplicate_keys = subject_metrics.loc[duplicates, identity_columns].drop_duplicates().to_dict("records")
+        raise ValueError(
+            "Subject metrics must contain at most one row per emission mode, decoder, and subject. "
+            f"Duplicate keys: {duplicate_keys}"
+        )
 
     rows = []
-    for decoder_a, decoder_b in itertools.combinations(decoders, 2):
-        left = subject_metrics[subject_metrics["decoder"] == decoder_a]
-        right = subject_metrics[subject_metrics["decoder"] == decoder_b]
-        paired = left.merge(right, on="subject", suffixes=("_a", "_b"))
-        if len(paired) < 2:
-            raise ValueError(f"Need at least two paired subjects for {decoder_a} vs {decoder_b}.")
-        for metric in metrics:
-            a_values = paired[f"{metric}_a"].to_numpy(dtype=float)
-            b_values = paired[f"{metric}_b"].to_numpy(dtype=float)
-            differences = a_values - b_values
-            direction = METRIC_DIRECTIONS.get(metric, "higher")
-            mean_a = float(a_values.mean())
-            mean_b = float(b_values.mean())
-            if direction == "lower":
-                better = decoder_a if mean_a < mean_b else decoder_b
-            else:
-                better = decoder_a if mean_a > mean_b else decoder_b
-            rows.append(
-                {
-                    "decoder_a": decoder_a,
-                    "decoder_b": decoder_b,
-                    "metric": metric,
-                    "preferred_direction": direction,
-                    "n_subjects": int(len(paired)),
-                    "decoder_a_mean": mean_a,
-                    "decoder_b_mean": mean_b,
-                    "mean_difference_a_minus_b": float(differences.mean()),
-                    "median_difference_a_minus_b": float(np.median(differences)),
-                    "sign_flip_p": sign_flip_p_value(
-                        differences,
-                        n_permutations=n_permutations,
-                        random_state=random_state,
-                    ),
-                    "better_decoder_by_mean": better,
-                }
-            )
+    for emission_mode, group in subject_metrics.groupby("emission_mode", sort=True):
+        decoders = sorted(group["decoder"].unique())
+        if len(decoders) < 2:
+            continue
+        for decoder_a, decoder_b in itertools.combinations(decoders, 2):
+            left = group[group["decoder"] == decoder_a]
+            right = group[group["decoder"] == decoder_b]
+            paired = left.merge(right, on=[*pairing_columns, "subject"], suffixes=("_a", "_b"))
+            if len(paired) < 2:
+                raise ValueError(
+                    f"Need at least two paired subjects for {decoder_a} vs {decoder_b} "
+                    f"in emission mode {emission_mode}."
+                )
+            for metric in metrics:
+                a_values = paired[f"{metric}_a"].to_numpy(dtype=float)
+                b_values = paired[f"{metric}_b"].to_numpy(dtype=float)
+                differences = a_values - b_values
+                direction = METRIC_DIRECTIONS.get(metric, "higher")
+                mean_a = float(a_values.mean())
+                mean_b = float(b_values.mean())
+                if direction == "lower":
+                    better = decoder_a if mean_a < mean_b else decoder_b
+                else:
+                    better = decoder_a if mean_a > mean_b else decoder_b
+                rows.append(
+                    {
+                        "emission_mode": str(emission_mode),
+                        "decoder_a": decoder_a,
+                        "decoder_b": decoder_b,
+                        "metric": metric,
+                        "preferred_direction": direction,
+                        "n_subjects": int(len(paired)),
+                        "decoder_a_mean": mean_a,
+                        "decoder_b_mean": mean_b,
+                        "mean_difference_a_minus_b": float(differences.mean()),
+                        "median_difference_a_minus_b": float(np.median(differences)),
+                        "sign_flip_p": sign_flip_p_value(
+                            differences,
+                            n_permutations=n_permutations,
+                            random_state=random_state,
+                        ),
+                        "better_decoder_by_mean": better,
+                    }
+                )
+
+    if not rows:
+        raise ValueError("Need at least two decoders within an emission mode for paired comparison.")
     return pd.DataFrame(rows)
 
 
@@ -180,12 +224,12 @@ def build_paired_stats_report(
         f"- Effect window: {_format_float(effect_window[0])} to {_format_float(effect_window[1])} s",
         "- Test: two-sided paired sign-flip test over subjects",
         "",
-        "| Decoder A | Decoder B | Metric | Preferred | Subjects | A mean | B mean | A minus B | Sign-flip p | Better by mean |",
-        "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| Emission mode | Decoder A | Decoder B | Metric | Preferred | Subjects | A mean | B mean | A minus B | Sign-flip p | Better by mean |",
+        "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for row in statistics.itertuples(index=False):
         lines.append(
-            f"| {row.decoder_a} | {row.decoder_b} | {row.metric} | {row.preferred_direction} | {row.n_subjects} | "
+            f"| {row.emission_mode} | {row.decoder_a} | {row.decoder_b} | {row.metric} | {row.preferred_direction} | {row.n_subjects} | "
             f"{_format_float(row.decoder_a_mean)} | {_format_float(row.decoder_b_mean)} | "
             f"{_format_float(row.mean_difference_a_minus_b)} | {_format_float(row.sign_flip_p, digits=4)} | {row.better_decoder_by_mean} |"
         )
