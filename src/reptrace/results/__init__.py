@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -11,8 +12,10 @@ from reptrace.results.tables import peak_metric_rows, summarize_metric_table
 __all__ = [
     "METRIC_COLUMNS",
     "SUMMARY_GROUP_COLUMNS",
+    "WEIGHT_COLUMN",
     "aggregate_time_decode_csvs",
     "aggregate_time_decode_results",
+    "mean_across_folds",
     "peak_metric_rows",
     "read_time_decode_results",
     "summarize_metric_table",
@@ -54,8 +57,9 @@ def read_time_decode_results(
     return pd.concat(frames, ignore_index=True)
 
 
-def _mean_across_folds(results: pd.DataFrame, group_columns: list[str]) -> pd.DataFrame:
+def mean_across_folds(results: pd.DataFrame, group_columns: Sequence[str]) -> pd.DataFrame:
     """Average fold metrics, weighting by held-out sample count when available."""
+    group_columns = list(group_columns)
     metric_columns = list(METRIC_COLUMNS)
     if WEIGHT_COLUMN not in results.columns:
         return results.groupby(group_columns, as_index=False)[metric_columns].mean()
@@ -85,6 +89,9 @@ def _mean_across_folds(results: pd.DataFrame, group_columns: list[str]) -> pd.Da
     return grouped[[*group_columns, *metric_columns]]
 
 
+_mean_across_folds = mean_across_folds
+
+
 def aggregate_time_decode_results(results: pd.DataFrame) -> pd.DataFrame:
     """Aggregate fold-level decoding results into time-level summary statistics."""
     missing = [column for column in ("subject", "time", *METRIC_COLUMNS) if column not in results.columns]
@@ -97,7 +104,7 @@ def aggregate_time_decode_results(results: pd.DataFrame) -> pd.DataFrame:
     group_columns = [column for column in SUMMARY_GROUP_COLUMNS if column in results.columns]
     subject_time_keys = [*group_columns, "subject", "time"]
     aggregate_keys = [*group_columns, "time"]
-    subject_time = _mean_across_folds(results, subject_time_keys).sort_values(subject_time_keys)
+    subject_time = mean_across_folds(results, subject_time_keys).sort_values(subject_time_keys)
     grouped = subject_time.groupby(aggregate_keys, as_index=False)
     aggregated = grouped[list(METRIC_COLUMNS)].mean()
     n_subjects = grouped["subject"].nunique().rename(columns={"subject": "n_subjects"})
