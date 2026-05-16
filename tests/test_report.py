@@ -65,6 +65,91 @@ def test_summarize_subject_time_decode_averages_folds(tmp_path: Path):
     assert summary["peak_accuracy"].round(3).tolist() == [0.61, 0.71]
 
 
+def test_summarize_subject_time_decode_preserves_decoder_groups(tmp_path: Path):
+    subject_csv = tmp_path / "sub-01_time_decode.csv"
+    subject = pd.concat(
+        [
+            _subject_frame("sub-01").assign(decoder="logistic"),
+            pd.DataFrame(
+                {
+                    "subject": ["sub-01", "sub-01", "sub-01", "sub-01"],
+                    "fold": [0, 1, 0, 1],
+                    "time": [0.15, 0.15, 0.25, 0.25],
+                    "accuracy": [0.50, 0.50, 0.80, 0.80],
+                    "log_loss": [0.8, 0.8, 0.5, 0.5],
+                    "brier": [0.6, 0.6, 0.3, 0.3],
+                    "ece": [0.2, 0.2, 0.1, 0.1],
+                    "decoder": ["lda", "lda", "lda", "lda"],
+                }
+            ),
+        ],
+        ignore_index=True,
+    )
+    subject.to_csv(subject_csv, index=False)
+
+    summary = summarize_subject_time_decode([subject_csv], effect_window=(0.1, 0.3))
+
+    assert "emission_mode" not in summary.columns
+    assert summary[["decoder", "subject", "peak_time"]].values.tolist() == [
+        ["lda", "sub-01", 0.25],
+        ["logistic", "sub-01", 0.15],
+    ]
+    assert summary["peak_accuracy"].round(3).tolist() == [0.80, 0.61]
+
+
+def test_summarize_subject_time_decode_preserves_emission_mode_groups(tmp_path: Path):
+    subject_csv = tmp_path / "sub-01_time_decode.csv"
+    subject = pd.concat(
+        [
+            _subject_frame("sub-01").assign(decoder="logistic", emission_mode="calibrated"),
+            pd.DataFrame(
+                {
+                    "subject": ["sub-01", "sub-01", "sub-01", "sub-01"],
+                    "fold": [0, 1, 0, 1],
+                    "time": [0.15, 0.15, 0.25, 0.25],
+                    "accuracy": [0.50, 0.50, 0.80, 0.80],
+                    "log_loss": [0.8, 0.8, 0.5, 0.5],
+                    "brier": [0.6, 0.6, 0.3, 0.3],
+                    "ece": [0.2, 0.2, 0.1, 0.1],
+                    "decoder": ["logistic", "logistic", "logistic", "logistic"],
+                    "emission_mode": ["uncalibrated", "uncalibrated", "uncalibrated", "uncalibrated"],
+                }
+            ),
+        ],
+        ignore_index=True,
+    )
+    subject.to_csv(subject_csv, index=False)
+
+    summary = summarize_subject_time_decode([subject_csv], effect_window=(0.1, 0.3))
+
+    assert summary[["decoder", "emission_mode", "subject", "peak_time"]].values.tolist() == [
+        ["logistic", "calibrated", "sub-01", 0.15],
+        ["logistic", "uncalibrated", "sub-01", 0.25],
+    ]
+
+
+def test_summarize_subject_time_decode_weights_fold_means_by_n_test(tmp_path: Path):
+    subject_csv = tmp_path / "sub-01_time_decode.csv"
+    pd.DataFrame(
+        {
+            "subject": ["sub-01", "sub-01", "sub-01", "sub-01"],
+            "fold": [0, 1, 0, 1],
+            "time": [0.15, 0.15, 0.25, 0.25],
+            "accuracy": [1.0, 0.0, 0.5, 0.5],
+            "log_loss": [0.1, 1.0, 0.5, 0.5],
+            "brier": [0.1, 1.0, 0.5, 0.5],
+            "ece": [0.1, 1.0, 0.5, 0.5],
+            "n_test": [9, 1, 9, 1],
+        }
+    ).to_csv(subject_csv, index=False)
+
+    summary = summarize_subject_time_decode([subject_csv], effect_window=(0.1, 0.3))
+
+    assert summary.loc[0, "peak_time"] == 0.15
+    assert round(summary.loc[0, "peak_accuracy"], 3) == 0.9
+    assert round(summary.loc[0, "effect_accuracy_mean"], 3) == 0.7
+
+
 def test_build_time_decode_report_writes_markdown_summary(tmp_path: Path):
     summary_csv = tmp_path / "summary.csv"
     subject_csv = tmp_path / "sub-01_time_decode.csv"
@@ -109,6 +194,33 @@ def test_build_time_decode_report_handles_multi_decoder_summary(tmp_path: Path):
     assert "| logistic | 2 | 0.150 | 0.610 | 0.490 | 0.595 | 0.105 |" in report
 
 
+def test_build_time_decode_report_includes_conditioned_subject_rows(tmp_path: Path):
+    summary = pd.concat(
+        [
+            _summary_frame().assign(decoder="logistic"),
+            _summary_frame().assign(decoder="lda"),
+        ],
+        ignore_index=True,
+    )
+    summary_csv = tmp_path / "summary.csv"
+    subject_csv = tmp_path / "sub-01_time_decode.csv"
+    summary.to_csv(summary_csv, index=False)
+    pd.concat(
+        [
+            _subject_frame("sub-01").assign(decoder="logistic"),
+            _subject_frame("sub-01", offset=0.1).assign(decoder="lda"),
+        ],
+        ignore_index=True,
+    ).to_csv(subject_csv, index=False)
+
+    report = build_time_decode_report(summary_csv, subject_csvs=[subject_csv])
+
+    assert "| Decoder | Subject | Peak time (s) | Peak accuracy | Effect-window mean accuracy |" in report
+    assert "| lda | sub-01 | 0.150 | 0.710 | 0.700 |" in report
+    assert "| logistic | sub-01 | 0.150 | 0.610 | 0.600 |" in report
+    assert "| Decoder | Emission mode | Subject |" not in report
+
+
 def test_build_time_decode_report_treats_single_decoder_as_time_report(tmp_path: Path):
     summary = _summary_frame()
     summary["decoder"] = "logistic"
@@ -119,3 +231,25 @@ def test_build_time_decode_report_treats_single_decoder_as_time_report(tmp_path:
 
     assert "# RepTrace Time-Decoding Report" in report
     assert "| Peak aggregate accuracy | 0.610 |" in report
+
+
+def test_build_time_decode_report_filters_subject_rows_to_single_summary_decoder(tmp_path: Path):
+    summary = _summary_frame()
+    summary["decoder"] = "logistic"
+    summary_csv = tmp_path / "summary.csv"
+    subject_csv = tmp_path / "sub-01_time_decode.csv"
+    summary.to_csv(summary_csv, index=False)
+    pd.concat(
+        [
+            _subject_frame("sub-01").assign(decoder="logistic"),
+            _subject_frame("sub-01", offset=0.1).assign(decoder="lda"),
+        ],
+        ignore_index=True,
+    ).to_csv(subject_csv, index=False)
+
+    report = build_time_decode_report(summary_csv, subject_csvs=[subject_csv])
+
+    assert "# RepTrace Time-Decoding Report" in report
+    assert "| Decoder | Subject | Peak time (s) | Peak accuracy | Effect-window mean accuracy |" in report
+    assert "| logistic | sub-01 | 0.150 | 0.610 | 0.600 |" in report
+    assert "| lda | sub-01" not in report
