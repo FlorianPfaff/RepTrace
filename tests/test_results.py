@@ -28,6 +28,29 @@ def test_aggregate_time_decode_results_averages_folds_then_subjects():
     assert aggregated["accuracy_mean"].round(3).tolist() == [0.75, 0.85]
 
 
+def test_aggregate_time_decode_results_weights_folds_by_test_size():
+    results = pd.DataFrame(
+        {
+            "subject": ["s1", "s1", "s2", "s2"],
+            "fold": [0, 1, 0, 1],
+            "time": [0.1, 0.1, 0.1, 0.1],
+            "accuracy": [1.0, 0.0, 0.2, 0.4],
+            "log_loss": [1.0, 3.0, 2.0, 4.0],
+            "brier": [0.1, 0.3, 0.2, 0.4],
+            "ece": [0.05, 0.15, 0.1, 0.3],
+            "n_test": [9, 1, 1, 3],
+        }
+    )
+
+    aggregated = aggregate_time_decode_results(results)
+
+    assert aggregated["n_subjects"].tolist() == [2]
+    assert aggregated["accuracy_mean"].round(3).tolist() == [0.625]
+    assert aggregated["log_loss_mean"].round(3).tolist() == [2.35]
+    assert aggregated["brier_mean"].round(3).tolist() == [0.235]
+    assert aggregated["ece_mean"].round(3).tolist() == [0.155]
+
+
 def test_aggregate_time_decode_csvs_uses_filename_as_subject(tmp_path: Path):
     first = tmp_path / "sub-01.csv"
     second = tmp_path / "sub-02.csv"
