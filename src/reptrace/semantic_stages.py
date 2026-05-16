@@ -88,7 +88,10 @@ def read_state_traces(csv_paths: list[Path]) -> pd.DataFrame:
 
 
 def _sequence_keys(frame: pd.DataFrame) -> pd.Series:
-    key_columns = sequence_key_columns(frame)
+    key_columns = [
+        *_stage_group_columns(frame),
+        *(column for column in sequence_key_columns(frame) if column not in STAGE_GROUP_COLUMNS),
+    ]
     validate_unique_sequence_times(frame, key_columns)
     return frame[key_columns].astype(str).agg("|".join, axis=1)
 

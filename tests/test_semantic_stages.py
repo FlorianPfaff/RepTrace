@@ -85,3 +85,21 @@ def test_analyze_semantic_stages_detects_category_conditioned_segments(tmp_path:
     assert stages["stop_time"].round(3).tolist() == [0.3, 0.3]
     assert stages["mean_posterior_true_class"].round(3).tolist() == [0.82, 0.82]
     assert set(time_summary["true_class"]) == {"animate", "inanimate"}
+
+
+def test_analyze_semantic_stages_keeps_emission_modes_distinct(tmp_path: Path):
+    state_csv = tmp_path / "state_trace.csv"
+    calibrated = _state_trace_frame().assign(emission_mode="calibrated")
+    uncalibrated = _state_trace_frame().assign(emission_mode="uncalibrated")
+    pd.concat([calibrated, uncalibrated], ignore_index=True).to_csv(state_csv, index=False)
+
+    time_summary, stages, _ = analyze_semantic_stages(
+        [state_csv],
+        posterior_threshold=0.7,
+        match_threshold=0.7,
+        min_duration=0.15,
+    )
+
+    assert set(time_summary["emission_mode"]) == {"calibrated", "uncalibrated"}
+    assert set(stages["emission_mode"]) == {"calibrated", "uncalibrated"}
+    assert len(stages) == 4
