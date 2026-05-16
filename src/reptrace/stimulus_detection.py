@@ -24,7 +24,8 @@ if __name__ == "reptrace._stimulus_detection_legacy":
     )
 else:
     from reptrace._stimulus_detection_public import *  # noqa: F401,F403
-    from reptrace._stimulus_detection_public import __all__, main
+    from reptrace._stimulus_detection_public import __all__ as __all__
+    from reptrace._stimulus_detection_public import main
 
     # Backwards-compatible private helpers used by the streaming detector.
     from reptrace._stimulus_detection_public import _event_row, _run_duration  # noqa: F401
