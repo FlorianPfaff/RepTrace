@@ -28,9 +28,7 @@ def _write_subject_csv(path: Path, subject: str, effects: list[float]) -> None:
 def test_subject_time_effects_averages_folds(tmp_path: Path):
     csv_path = tmp_path / "sub-01_time_decode.csv"
     _write_subject_csv(csv_path, "sub-01", [0.0, 0.1, 0.2, 0.3])
-
     effects = subject_time_effects([csv_path], chance=0.5)
-
     assert effects.index.tolist() == ["sub-01"]
     assert effects.round(3).iloc[0].tolist() == [0.001, 0.101, 0.201, 0.301]
 
@@ -49,9 +47,7 @@ def test_subject_time_effects_weights_folds_by_test_size(tmp_path: Path):
             "n_test": [9, 1],
         }
     ).to_csv(csv_path, index=False)
-
     effects = subject_time_effects([csv_path], chance=0.5)
-
     assert effects.loc["sub-01", 0.1] == pytest.approx(0.4)
 
 
@@ -70,7 +66,6 @@ def test_subject_time_effects_rejects_mixed_decoders_without_filter(tmp_path: Pa
         }
     )
     frame.to_csv(csv_path, index=False)
-
     with pytest.raises(ValueError, match="multiple decoder values"):
         subject_time_effects([csv_path])
 
@@ -98,29 +93,63 @@ def test_subject_time_effects_filters_decoder_and_emission_mode(tmp_path: Path):
             }
         )
     pd.DataFrame(rows).to_csv(csv_path, index=False)
-
     effects = subject_time_effects([csv_path], chance=0.5, decoder="linear_svm", emission_mode="uncalibrated")
-
     assert effects.loc["sub-01", 0.1] == pytest.approx(0.3)
+
+
+def test_subject_time_effects_requires_observations_for_ece(tmp_path: Path):
+    csv_path = tmp_path / "sub-01_time_decode.csv"
+    _write_subject_csv(csv_path, "sub-01", [0.0, 0.1, 0.2, 0.3])
+
+    with pytest.raises(ValueError, match="Exact ECE inference requires"):
+        subject_time_effects([csv_path], metric="ece", chance=0.0)
+
+
+def test_subject_time_effects_uses_exact_ece_observations(tmp_path: Path):
+    results_path = tmp_path / "sub-01_time_decode.csv"
+    observations_path = tmp_path / "sub-01_observations.csv"
+    pd.DataFrame(
+        {
+            "subject": ["sub-01", "sub-01"],
+            "fold": [0, 1],
+            "time": [0.1, 0.1],
+            "accuracy": [1.0, 0.0],
+            "log_loss": [0.4, 0.6],
+            "brier": [0.1, 0.2],
+            "ece": [0.9, 0.9],
+            "n_test": [1, 1],
+        }
+    ).to_csv(results_path, index=False)
+    pd.DataFrame(
+        {
+            "subject": ["sub-01", "sub-01"],
+            "fold": [0, 1],
+            "time": [0.1, 0.1],
+            "true_label": [0, 1],
+            "prob_class_0": [0.6, 0.6],
+            "prob_class_1": [0.4, 0.4],
+        }
+    ).to_csv(observations_path, index=False)
+
+    effects = subject_time_effects(
+        [results_path],
+        metric="ece",
+        chance=0.0,
+        observation_csv_paths=[observations_path],
+        ece_bins=2,
+    )
+
+    assert effects.loc["sub-01", 0.1] == pytest.approx(0.1)
 
 
 def test_sign_flip_time_inference_finds_cluster(tmp_path: Path):
     csv_paths = []
     for idx in range(8):
         csv_path = tmp_path / f"sub-{idx + 1:02d}_time_decode.csv"
-        _write_subject_csv(
-            csv_path,
-            f"sub-{idx + 1:02d}",
-            [0.0, 0.07 + idx * 0.004, 0.10 + idx * 0.004, 0.09 + idx * 0.004],
-        )
+        _write_subject_csv(csv_path, f"sub-{idx + 1:02d}", [0.0, 0.07 + idx * 0.004, 0.10 + idx * 0.004, 0.09 + idx * 0.004])
         csv_paths.append(csv_path)
 
-    time_table, cluster_table = sign_flip_time_inference(
-        csv_paths,
-        n_permutations=2048,
-        random_state=7,
-        cluster_alpha=0.05,
-    )
+    time_table, cluster_table = sign_flip_time_inference(csv_paths, n_permutations=2048, random_state=7, cluster_alpha=0.05)
 
     assert len(time_table) == 4
     assert not cluster_table.empty
