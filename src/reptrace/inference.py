@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from reptrace.results import read_time_decode_results
+from reptrace.results import SUMMARY_GROUP_COLUMNS, mean_across_folds, read_time_decode_results
 
 
 def _expand_paths(patterns: list[str]) -> list[Path]:
@@ -21,26 +21,98 @@ def _expand_paths(patterns: list[str]) -> list[Path]:
     return paths
 
 
+def _condition_filters(decoder: str | None, emission_mode: str | None) -> dict[str, str]:
+    filters: dict[str, str] = {}
+    if decoder is not None:
+        filters["decoder"] = str(decoder)
+    if emission_mode is not None:
+        filters["emission_mode"] = str(emission_mode)
+    return filters
+
+
+def _display_values(series: pd.Series) -> list[str]:
+    values = series.astype(object).where(series.notna(), "<NA>").astype(str).drop_duplicates()
+    return sorted(values.tolist())
+
+
+def _filter_results(results: pd.DataFrame, filters: dict[str, str]) -> pd.DataFrame:
+    filtered = results
+    for column, value in filters.items():
+        if column not in filtered.columns:
+            raise ValueError(f"Cannot filter by '{column}': column is not present in the result CSVs.")
+        values = filtered[column].astype(object).where(filtered[column].notna(), "<NA>").astype(str)
+        mask = values == value
+        if not bool(mask.any()):
+            available = ", ".join(_display_values(filtered[column])) or "<none>"
+            raise ValueError(f"No rows match {column}={value!r}. Available values: {available}.")
+        filtered = filtered.loc[mask].copy()
+    return filtered
+
+
+def _single_condition_values(results: pd.DataFrame, filters: dict[str, str]) -> dict[str, str]:
+    condition_values: dict[str, str] = {}
+    for column in SUMMARY_GROUP_COLUMNS:
+        if column not in results.columns:
+            continue
+        values = _display_values(results[column])
+        if len(values) > 1:
+            option_name = column.replace("_", "-")
+            raise ValueError(
+                f"Result CSVs contain multiple {column} values ({', '.join(values)}). "
+                f"Run inference for one condition at a time, for example with --{option_name}."
+            )
+        if values:
+            condition_values[column] = filters.get(column, values[0])
+    return condition_values
+
+
+def _subject_time_effects_and_conditions(
+    csv_paths: list[Path],
+    *,
+    metric: str,
+    chance: float,
+    decoder: str | None,
+    emission_mode: str | None,
+) -> tuple[pd.DataFrame, dict[str, str]]:
+    results = read_time_decode_results(csv_paths)
+    if metric not in results.columns:
+        raise ValueError(f"Metric column '{metric}' not found in results.")
+
+    filters = _condition_filters(decoder, emission_mode)
+    results = _filter_results(results, filters)
+    condition_values = _single_condition_values(results, filters)
+
+    subject_time = mean_across_folds(results, ["subject", "time"], metric_columns=[metric]).sort_values(
+        ["subject", "time"]
+    )
+    matrix = subject_time.pivot(index="subject", columns="time", values=metric).sort_index(axis=0).sort_index(axis=1)
+    if matrix.isna().any().any():
+        raise ValueError("All subjects must have results for the same time points.")
+    return matrix - chance, condition_values
+
+
 def subject_time_effects(
     csv_paths: list[Path],
     *,
     metric: str = "accuracy",
     chance: float = 0.5,
+    decoder: str | None = None,
+    emission_mode: str | None = None,
 ) -> pd.DataFrame:
-    """Return a subject-by-time matrix of fold-averaged effects against chance."""
-    results = read_time_decode_results(csv_paths)
-    if metric not in results.columns:
-        raise ValueError(f"Metric column '{metric}' not found in results.")
+    """Return a subject-by-time matrix of fold-size-weighted effects against chance.
 
-    subject_time = (
-        results.groupby(["subject", "time"], as_index=False)[metric]
-        .mean()
-        .sort_values(["subject", "time"])
+    Inference is defined for one decoder/emission condition at a time. If the
+    input CSVs contain multiple decoders or emission modes, pass ``decoder``
+    and/or ``emission_mode`` to select the condition to test.
+    """
+    effects, _ = _subject_time_effects_and_conditions(
+        csv_paths,
+        metric=metric,
+        chance=chance,
+        decoder=decoder,
+        emission_mode=emission_mode,
     )
-    matrix = subject_time.pivot(index="subject", columns="time", values=metric).sort_index(axis=0).sort_index(axis=1)
-    if matrix.isna().any().any():
-        raise ValueError("All subjects must have results for the same time points.")
-    return matrix - chance
+    return effects
 
 
 def _t_statistic(effects: np.ndarray) -> np.ndarray:
@@ -91,6 +163,14 @@ def _cluster_masses(statistics: np.ndarray, threshold: np.ndarray) -> list[float
     return masses
 
 
+def _prepend_condition_columns(table: pd.DataFrame, condition_values: dict[str, str]) -> pd.DataFrame:
+    if table.empty and not table.columns.tolist():
+        table = pd.DataFrame(columns=[])
+    for column, value in reversed(list(condition_values.items())):
+        table.insert(0, column, value)
+    return table
+
+
 def sign_flip_time_inference(
     csv_paths: list[Path],
     *,
@@ -99,18 +179,26 @@ def sign_flip_time_inference(
     n_permutations: int = 10_000,
     random_state: int = 13,
     cluster_alpha: float = 0.05,
+    decoder: str | None = None,
+    emission_mode: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Run one-sided subject-level sign-flip inference over time.
 
-    The test uses fold-averaged subject time courses as independent samples.
-    Pointwise p-values test whether the metric is above ``chance`` at each time
-    point. Cluster p-values use a max-cluster-mass correction over contiguous
-    above-threshold time points.
+    The test uses fold-size-weighted subject time courses as independent
+    samples. Pointwise p-values test whether the metric is above ``chance`` at
+    each time point. Cluster p-values use a max-cluster-mass correction over
+    contiguous above-threshold time points.
     """
     if not 0 < cluster_alpha < 1:
         raise ValueError("cluster_alpha must be between 0 and 1.")
 
-    effects = subject_time_effects(csv_paths, metric=metric, chance=chance)
+    effects, condition_values = _subject_time_effects_and_conditions(
+        csv_paths,
+        metric=metric,
+        chance=chance,
+        decoder=decoder,
+        emission_mode=emission_mode,
+    )
     effect_values = effects.to_numpy(dtype=float)
     times = effects.columns.to_numpy(dtype=float)
     n_subjects = effect_values.shape[0]
@@ -181,7 +269,7 @@ def sign_flip_time_inference(
             "cluster_p",
         ],
     )
-    return time_table, cluster_table
+    return _prepend_condition_columns(time_table, condition_values), _prepend_condition_columns(cluster_table, condition_values)
 
 
 def main() -> None:
@@ -194,6 +282,8 @@ def main() -> None:
     parser.add_argument("--n-permutations", type=int, default=10_000)
     parser.add_argument("--random-state", type=int, default=13)
     parser.add_argument("--cluster-alpha", type=float, default=0.05)
+    parser.add_argument("--decoder", help="Decoder value to analyze when the CSVs contain multiple decoders.")
+    parser.add_argument("--emission-mode", help="Emission mode to analyze when the CSVs contain multiple emission modes.")
     parser.add_argument("--out-time", type=Path, required=True)
     parser.add_argument("--out-clusters", type=Path, required=True)
     args = parser.parse_args()
@@ -205,6 +295,8 @@ def main() -> None:
         n_permutations=args.n_permutations,
         random_state=args.random_state,
         cluster_alpha=args.cluster_alpha,
+        decoder=args.decoder,
+        emission_mode=args.emission_mode,
     )
     args.out_time.parent.mkdir(parents=True, exist_ok=True)
     args.out_clusters.parent.mkdir(parents=True, exist_ok=True)
