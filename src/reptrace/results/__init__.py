@@ -57,10 +57,19 @@ def read_time_decode_results(
     return pd.concat(frames, ignore_index=True)
 
 
-def mean_across_folds(results: pd.DataFrame, group_columns: Sequence[str]) -> pd.DataFrame:
+def mean_across_folds(
+    results: pd.DataFrame,
+    group_columns: Sequence[str],
+    *,
+    metric_columns: Sequence[str] = METRIC_COLUMNS,
+) -> pd.DataFrame:
     """Average fold metrics, weighting by held-out sample count when available."""
     group_columns = list(group_columns)
-    metric_columns = list(METRIC_COLUMNS)
+    metric_columns = list(metric_columns)
+    missing = [column for column in (*group_columns, *metric_columns) if column not in results.columns]
+    if missing:
+        raise ValueError(f"Results are missing required columns: {missing}")
+
     if WEIGHT_COLUMN not in results.columns:
         return results.groupby(group_columns, as_index=False)[metric_columns].mean()
 
@@ -83,7 +92,9 @@ def mean_across_folds(results: pd.DataFrame, group_columns: Sequence[str]) -> pd
 
     aggregate_columns = [*weighted_columns, *denominator_columns]
     grouped = weighted.groupby(group_columns, as_index=False)[aggregate_columns].sum()
-    for metric, weighted_column, denominator_column in zip(metric_columns, weighted_columns, denominator_columns):
+    for metric, weighted_column, denominator_column in zip(
+        metric_columns, weighted_columns, denominator_columns, strict=True
+    ):
         grouped[metric] = grouped[weighted_column] / grouped[denominator_column]
 
     return grouped[[*group_columns, *metric_columns]]
