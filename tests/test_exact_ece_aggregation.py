@@ -67,7 +67,7 @@ def test_exact_ece_can_be_recomputed_from_observation_csvs(tmp_path: Path):
     _fold_results().to_csv(results, index=False)
     _observations().to_csv(observations, index=False)
 
-    aggregated = aggregate_time_decode_csvs([results], out_path=out, observation_paths=[observations], ece_bins=2)
+    aggregated = aggregate_time_decode_csvs([results], out_path=out, observation_csv_paths=[observations], ece_bins=2)
 
     assert out.exists()
     assert aggregated["ece_mean"].round(3).tolist() == [0.1]
