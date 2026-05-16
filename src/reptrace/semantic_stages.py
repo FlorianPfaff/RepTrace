@@ -7,6 +7,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from reptrace.temporal_model import sequence_key_columns, validate_unique_sequence_times
+
 STAGE_GROUP_COLUMNS = ("decoder", "emission_mode")
 
 
@@ -71,13 +73,23 @@ def read_state_traces(csv_paths: list[Path]) -> pd.DataFrame:
         frame["subject"] = frame["subject"].astype(str)
         frame["decoder"] = frame["decoder"].astype(str)
         frame["emission_mode"] = frame["emission_mode"].astype(str)
-        frame["source_file"] = csv_path.name
+        if "source_file" not in frame.columns:
+            frame["source_file"] = csv_path.name
+        else:
+            frame["source_file"] = frame["source_file"].fillna(csv_path.name)
+        if "source_path" not in frame.columns:
+            frame["source_path"] = str(csv_path)
+        else:
+            frame["source_path"] = frame["source_path"].fillna(str(csv_path))
+        frame["source_file"] = frame["source_file"].astype(str)
+        frame["source_path"] = frame["source_path"].astype(str)
         frames.append(frame)
     return pd.concat(frames, ignore_index=True)
 
 
 def _sequence_keys(frame: pd.DataFrame) -> pd.Series:
-    key_columns = [column for column in ("subject", "fold", "sequence_id") if column in frame.columns]
+    key_columns = sequence_key_columns(frame)
+    validate_unique_sequence_times(frame, key_columns)
     return frame[key_columns].astype(str).agg("|".join, axis=1)
 
 
