@@ -12,6 +12,7 @@ from reptrace.observations import probability_columns
 from reptrace.results.tables import peak_metric_rows, summarize_metric_table
 
 __all__ = [
+    "DEFAULT_ECE_BINS",
     "METRIC_COLUMNS",
     "SUMMARY_GROUP_COLUMNS",
     "WEIGHT_COLUMN",
@@ -22,6 +23,7 @@ __all__ = [
     "read_probability_observations",
     "read_time_decode_observations",
     "read_time_decode_results",
+    "subject_time_metrics",
     "summarize_metric_table",
 ]
 
@@ -112,7 +114,36 @@ def read_probability_observations(
     return pd.concat(frames, ignore_index=True)
 
 
-read_time_decode_observations = read_probability_observations
+def read_time_decode_observations(
+    csv_paths: list[Path],
+    *,
+    subject_column: str | None = None,
+    result_csv_paths: list[Path] | None = None,
+    results: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Read probability observations, optionally matching subject fallbacks to result files."""
+    fallback_subjects_by_file: Mapping[str, object] | None = None
+    if result_csv_paths is not None:
+        if results is None:
+            results = read_time_decode_results(result_csv_paths)
+        fallback_subjects_by_file = _observation_subject_fallbacks(results, result_csv_paths, csv_paths)
+    return read_probability_observations(
+        csv_paths,
+        subject_column=subject_column,
+        fallback_subjects_by_file=fallback_subjects_by_file,
+    )
+
+
+def _selected_metric_columns(metric_columns: Sequence[str] | str | None = None) -> list[str]:
+    if metric_columns is None:
+        selected_metric_columns = list(METRIC_COLUMNS)
+    elif isinstance(metric_columns, str):
+        selected_metric_columns = [metric_columns]
+    else:
+        selected_metric_columns = list(metric_columns)
+    if not selected_metric_columns:
+        raise ValueError("At least one metric column is required.")
+    return selected_metric_columns
 
 
 def _mean_across_folds(
@@ -122,14 +153,7 @@ def _mean_across_folds(
     metric_columns: Sequence[str] | str | None = None,
 ) -> pd.DataFrame:
     """Average fold metrics, weighting by held-out sample count when available."""
-    if metric_columns is None:
-        selected_metric_columns = list(METRIC_COLUMNS)
-    elif isinstance(metric_columns, str):
-        selected_metric_columns = [metric_columns]
-    else:
-        selected_metric_columns = list(metric_columns)
-    if not selected_metric_columns:
-        raise ValueError("At least one metric column is required.")
+    selected_metric_columns = _selected_metric_columns(metric_columns)
     missing = [column for column in selected_metric_columns if column not in results.columns]
     if missing:
         raise ValueError(f"Results are missing metric columns: {missing}")
@@ -174,6 +198,27 @@ def _normalize_emission_mode(frame: pd.DataFrame) -> pd.DataFrame:
     normalized["emission_mode"] = normalized["emission_mode"].where(pd.notna(normalized["emission_mode"]), "calibrated").astype(str)
     normalized.loc[normalized["emission_mode"].str.len() == 0, "emission_mode"] = "calibrated"
     return normalized
+
+
+def _prepare_observations_for_subject_time(
+    results: pd.DataFrame,
+    observations: pd.DataFrame,
+    group_columns: list[str],
+) -> pd.DataFrame:
+    """Ensure observations carry the condition columns needed to align with results."""
+    prepared = _normalize_emission_mode(observations).copy()
+    for column in group_columns:
+        if column in prepared.columns:
+            continue
+        values = results[column].dropna().astype(str).unique()
+        if len(values) == 1:
+            prepared[column] = values[0]
+            continue
+        raise ValueError(
+            "Probability observations are missing condition column "
+            f"'{column}' while result metrics contain multiple {column} values."
+        )
+    return prepared
 
 
 def _probability_ece_by_group(observations: pd.DataFrame, group_columns: list[str], *, n_bins: int) -> pd.DataFrame:
@@ -300,6 +345,39 @@ def _observation_subject_fallbacks(results: pd.DataFrame, csv_paths: list[Path],
     return fallbacks
 
 
+def subject_time_metrics(
+    results: pd.DataFrame,
+    *,
+    observations: pd.DataFrame | None = None,
+    metric_columns: Sequence[str] | str | None = None,
+    ece_bins: int = DEFAULT_ECE_BINS,
+) -> pd.DataFrame:
+    """Return subject/time metrics with exact pooled ECE when observations are supplied."""
+    selected_metric_columns = _selected_metric_columns(metric_columns)
+    missing = [column for column in ("subject", "time", *selected_metric_columns) if column not in results.columns]
+    if missing:
+        raise ValueError(f"Results are missing required columns: {missing}")
+    if ece_bins < 1:
+        raise ValueError("ece_bins must be positive")
+
+    results = _normalize_emission_mode(results)
+    group_columns = [column for column in SUMMARY_GROUP_COLUMNS if column in results.columns]
+    subject_time_keys = [*group_columns, "subject", "time"]
+    subject_time = _mean_across_folds(results, subject_time_keys, metric_columns=selected_metric_columns).sort_values(
+        subject_time_keys
+    )
+    if observations is not None and "ece" in selected_metric_columns:
+        prepared_observations = _prepare_observations_for_subject_time(results, observations, group_columns)
+        subject_time = _replace_ece_from_observations(
+            subject_time,
+            prepared_observations,
+            subject_time_keys,
+            n_bins=ece_bins,
+            expected_counts=_expected_observation_counts(results, subject_time_keys),
+        )
+    return subject_time.sort_values(subject_time_keys).reset_index(drop=True)
+
+
 def aggregate_time_decode_results(
     results: pd.DataFrame,
     *,
@@ -313,25 +391,9 @@ def aggregate_time_decode_results(
     ECE is recomputed from pooled held-out probabilities within each
     subject/time group instead of averaging fold-level ECE values.
     """
-    missing = [column for column in ("subject", "time", *METRIC_COLUMNS) if column not in results.columns]
-    if missing:
-        raise ValueError(f"Results are missing required columns: {missing}")
-    if ece_bins < 1:
-        raise ValueError("ece_bins must be positive")
-
-    results = _normalize_emission_mode(results)
-    group_columns = [column for column in SUMMARY_GROUP_COLUMNS if column in results.columns]
-    subject_time_keys = [*group_columns, "subject", "time"]
+    subject_time = subject_time_metrics(results, observations=observations, ece_bins=ece_bins)
+    group_columns = [column for column in SUMMARY_GROUP_COLUMNS if column in subject_time.columns]
     aggregate_keys = [*group_columns, "time"]
-    subject_time = _mean_across_folds(results, subject_time_keys).sort_values(subject_time_keys)
-    if observations is not None:
-        subject_time = _replace_ece_from_observations(
-            subject_time,
-            observations,
-            subject_time_keys,
-            n_bins=ece_bins,
-            expected_counts=_expected_observation_counts(results, subject_time_keys),
-        )
 
     grouped = subject_time.groupby(aggregate_keys, as_index=False)
     aggregated = grouped[list(METRIC_COLUMNS)].mean()
@@ -359,10 +421,11 @@ def aggregate_time_decode_csvs(
     results = read_time_decode_results(csv_paths, subject_column=subject_column)
     observations = None
     if observation_csv_paths is not None:
-        observations = read_probability_observations(
+        observations = read_time_decode_observations(
             observation_csv_paths,
             subject_column=observation_subject_column,
-            fallback_subjects_by_file=_observation_subject_fallbacks(results, csv_paths, observation_csv_paths),
+            result_csv_paths=csv_paths,
+            results=results,
         )
     aggregated = aggregate_time_decode_results(results, observations=observations, ece_bins=ece_bins)
     out_path.parent.mkdir(parents=True, exist_ok=True)
