@@ -7,7 +7,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from reptrace.results import SUMMARY_GROUP_COLUMNS, mean_across_folds, read_time_decode_results
+from reptrace.results import (
+    DEFAULT_ECE_BINS,
+    SUMMARY_GROUP_COLUMNS,
+    read_time_decode_observations,
+    read_time_decode_results,
+    subject_time_metrics,
+)
 
 
 def _expand_paths(patterns: list[str]) -> list[Path]:
@@ -49,6 +55,20 @@ def _filter_results(results: pd.DataFrame, filters: dict[str, str]) -> pd.DataFr
     return filtered
 
 
+def _filter_available_conditions(frame: pd.DataFrame, filters: dict[str, str]) -> pd.DataFrame:
+    filtered = frame
+    for column, value in filters.items():
+        if column not in filtered.columns:
+            continue
+        values = filtered[column].astype(object).where(filtered[column].notna(), "<NA>").astype(str)
+        mask = values == value
+        if not bool(mask.any()):
+            available = ", ".join(_display_values(filtered[column])) or "<none>"
+            raise ValueError(f"No observation rows match {column}={value!r}. Available values: {available}.")
+        filtered = filtered.loc[mask].copy()
+    return filtered
+
+
 def _single_condition_values(results: pd.DataFrame, filters: dict[str, str]) -> dict[str, str]:
     condition_values: dict[str, str] = {}
     for column in SUMMARY_GROUP_COLUMNS:
@@ -73,18 +93,39 @@ def _subject_time_effects_and_conditions(
     chance: float,
     decoder: str | None,
     emission_mode: str | None,
+    observation_csv_paths: list[Path] | None,
+    observation_subject_column: str | None,
+    ece_bins: int,
 ) -> tuple[pd.DataFrame, dict[str, str]]:
-    results = read_time_decode_results(csv_paths)
-    if metric not in results.columns:
+    all_results = read_time_decode_results(csv_paths)
+    if metric not in all_results.columns:
         raise ValueError(f"Metric column '{metric}' not found in results.")
+    if metric == "ece" and observation_csv_paths is None:
+        raise ValueError(
+            "Exact ECE inference requires probability observation CSVs. "
+            "Pass observation_csv_paths or the CLI --observations option."
+        )
 
     filters = _condition_filters(decoder, emission_mode)
-    results = _filter_results(results, filters)
+    results = _filter_results(all_results, filters)
     condition_values = _single_condition_values(results, filters)
 
-    subject_time = mean_across_folds(results, ["subject", "time"], metric_columns=[metric]).sort_values(
-        ["subject", "time"]
-    )
+    observations = None
+    if observation_csv_paths is not None:
+        observations = read_time_decode_observations(
+            observation_csv_paths,
+            subject_column=observation_subject_column,
+            result_csv_paths=csv_paths,
+            results=all_results,
+        )
+        observations = _filter_available_conditions(observations, filters)
+
+    subject_time = subject_time_metrics(
+        results,
+        observations=observations,
+        metric_columns=[metric],
+        ece_bins=ece_bins,
+    ).sort_values(["subject", "time"])
     matrix = subject_time.pivot(index="subject", columns="time", values=metric).sort_index(axis=0).sort_index(axis=1)
     if matrix.isna().any().any():
         raise ValueError("All subjects must have results for the same time points.")
@@ -98,12 +139,15 @@ def subject_time_effects(
     chance: float = 0.5,
     decoder: str | None = None,
     emission_mode: str | None = None,
+    observation_csv_paths: list[Path] | None = None,
+    observation_subject_column: str | None = None,
+    ece_bins: int = DEFAULT_ECE_BINS,
 ) -> pd.DataFrame:
     """Return a subject-by-time matrix of fold-size-weighted effects against chance.
 
-    Inference is defined for one decoder/emission condition at a time. If the
-    input CSVs contain multiple decoders or emission modes, pass ``decoder``
-    and/or ``emission_mode`` to select the condition to test.
+    ECE inference uses pooled held-out probability observations. Pass
+    ``observation_csv_paths`` when ``metric='ece'``; fold-averaged ECE is not
+    used for inferential tests.
     """
     effects, _ = _subject_time_effects_and_conditions(
         csv_paths,
@@ -111,6 +155,9 @@ def subject_time_effects(
         chance=chance,
         decoder=decoder,
         emission_mode=emission_mode,
+        observation_csv_paths=observation_csv_paths,
+        observation_subject_column=observation_subject_column,
+        ece_bins=ece_bins,
     )
     return effects
 
@@ -123,15 +170,9 @@ def _t_statistic(effects: np.ndarray) -> np.ndarray:
     return np.divide(means, sem, out=np.zeros_like(means), where=sem > 0)
 
 
-def _sign_flip_t_statistics(
-    effects: np.ndarray,
-    *,
-    n_permutations: int,
-    random_state: int,
-) -> np.ndarray:
+def _sign_flip_t_statistics(effects: np.ndarray, *, n_permutations: int, random_state: int) -> np.ndarray:
     if n_permutations < 1:
         raise ValueError("n_permutations must be at least 1.")
-
     rng = np.random.default_rng(random_state)
     n_subjects = effects.shape[0]
     signs = rng.choice(np.array([-1.0, 1.0]), size=(n_permutations, n_subjects))
@@ -181,6 +222,9 @@ def sign_flip_time_inference(
     cluster_alpha: float = 0.05,
     decoder: str | None = None,
     emission_mode: str | None = None,
+    observation_csv_paths: list[Path] | None = None,
+    observation_subject_column: str | None = None,
+    ece_bins: int = DEFAULT_ECE_BINS,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Run one-sided subject-level sign-flip inference over time.
 
@@ -198,6 +242,9 @@ def sign_flip_time_inference(
         chance=chance,
         decoder=decoder,
         emission_mode=emission_mode,
+        observation_csv_paths=observation_csv_paths,
+        observation_subject_column=observation_subject_column,
+        ece_bins=ece_bins,
     )
     effect_values = effects.to_numpy(dtype=float)
     times = effects.columns.to_numpy(dtype=float)
@@ -205,11 +252,7 @@ def sign_flip_time_inference(
 
     observed_statistic = _t_statistic(effect_values)
     observed_effect = effect_values.mean(axis=0)
-    null_statistics = _sign_flip_t_statistics(
-        effect_values,
-        n_permutations=n_permutations,
-        random_state=random_state,
-    )
+    null_statistics = _sign_flip_t_statistics(effect_values, n_permutations=n_permutations, random_state=random_state)
 
     pointwise_p = (1.0 + (null_statistics >= observed_statistic[None, :]).sum(axis=0)) / (n_permutations + 1.0)
     cluster_threshold = np.quantile(null_statistics, 1.0 - cluster_alpha, axis=0)
@@ -273,9 +316,7 @@ def sign_flip_time_inference(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Run subject-level sign-flip inference for time-resolved decoding results."
-    )
+    parser = argparse.ArgumentParser(description="Run subject-level sign-flip inference for time-resolved decoding results.")
     parser.add_argument("csv", nargs="+", help="Subject result CSVs or glob patterns.")
     parser.add_argument("--metric", default="accuracy")
     parser.add_argument("--chance", type=float, default=0.5)
@@ -284,6 +325,9 @@ def main() -> None:
     parser.add_argument("--cluster-alpha", type=float, default=0.05)
     parser.add_argument("--decoder", help="Decoder value to analyze when the CSVs contain multiple decoders.")
     parser.add_argument("--emission-mode", help="Emission mode to analyze when the CSVs contain multiple emission modes.")
+    parser.add_argument("--observations", nargs="+", help="Probability-observation CSVs used for exact ECE inference.")
+    parser.add_argument("--observation-subject-column", help="Subject column for --observations.")
+    parser.add_argument("--ece-bins", type=int, default=DEFAULT_ECE_BINS, help="Number of bins for exact observation-level ECE.")
     parser.add_argument("--out-time", type=Path, required=True)
     parser.add_argument("--out-clusters", type=Path, required=True)
     args = parser.parse_args()
@@ -297,6 +341,9 @@ def main() -> None:
         cluster_alpha=args.cluster_alpha,
         decoder=args.decoder,
         emission_mode=args.emission_mode,
+        observation_csv_paths=_expand_paths(args.observations) if args.observations else None,
+        observation_subject_column=args.observation_subject_column,
+        ece_bins=args.ece_bins,
     )
     args.out_time.parent.mkdir(parents=True, exist_ok=True)
     args.out_clusters.parent.mkdir(parents=True, exist_ok=True)
@@ -308,10 +355,7 @@ def main() -> None:
         print("No above-threshold clusters found.")
     else:
         best = cluster_table.loc[cluster_table["cluster_p"].idxmin()]
-        print(
-            f"Best cluster: {best['start_time']:.3f} to {best['stop_time']:.3f}s, "
-            f"p={best['cluster_p']:.4f}"
-        )
+        print(f"Best cluster: {best['start_time']:.3f} to {best['stop_time']:.3f}s, p={best['cluster_p']:.4f}")
 
 
 if __name__ == "__main__":
