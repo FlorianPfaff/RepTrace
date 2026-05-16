@@ -104,28 +104,49 @@ def _time_sem(series: pd.Series) -> float:
     return float(series.sem())
 
 
+def _subject_balanced_category_summary(aligned: pd.DataFrame, group_columns: list[str]) -> pd.DataFrame:
+    """Aggregate category time courses by averaging subjects, not trials."""
+    subject_group_columns = [*group_columns, "subject"]
+    viterbi_posterior_source = "viterbi_posterior" if "viterbi_posterior" in aligned.columns else "posterior_true_class"
+    subject_summary = (
+        aligned.groupby(subject_group_columns, as_index=False)
+        .agg(
+            n_observations=("time", "size"),
+            n_sequences=("sequence_key", "nunique"),
+            posterior_true_class=("posterior_true_class", "mean"),
+            viterbi_matches_true_class=("viterbi_matches_true_class", "mean"),
+            viterbi_posterior=(viterbi_posterior_source, "mean"),
+        )
+    )
+    return (
+        subject_summary.groupby(group_columns, as_index=False)
+        .agg(
+            n_observations=("n_observations", "sum"),
+            n_subjects=("subject", "nunique"),
+            n_sequences=("n_sequences", "sum"),
+            posterior_true_class_mean=("posterior_true_class", "mean"),
+            posterior_true_class_sem=("posterior_true_class", _time_sem),
+            viterbi_match_rate=("viterbi_matches_true_class", "mean"),
+            viterbi_posterior_mean=("viterbi_posterior", "mean"),
+        )
+    )
+
+
 def summarize_category_timecourse(state_traces: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
-    """Summarize category-conditioned state stability over time."""
+    """Summarize category-conditioned state stability over time.
+
+    Category metrics are subject-balanced: trials/sequences are averaged within
+    each subject first, then subject means are averaged at each class/time point.
+    """
     columns = posterior_columns(state_traces)
     state_names = _state_names(state_traces, columns)
     if "true_class" not in state_traces.columns:
         return summarize_dominant_timecourse(state_traces), state_names
 
     aligned = _add_true_class_alignment(state_traces, columns, state_names)
-    summary = (
-        aligned.groupby([*_stage_group_columns(aligned), "true_class", "time"], as_index=False)
-        .agg(
-            n_observations=("time", "size"),
-            n_subjects=("subject", "nunique"),
-            n_sequences=("sequence_key", "nunique"),
-            posterior_true_class_mean=("posterior_true_class", "mean"),
-            posterior_true_class_sem=("posterior_true_class", _time_sem),
-            viterbi_match_rate=("viterbi_matches_true_class", "mean"),
-            viterbi_posterior_mean=("viterbi_posterior", "mean") if "viterbi_posterior" in aligned.columns else ("posterior_true_class", "mean"),
-        )
-        .sort_values([*_stage_group_columns(aligned), "true_class", "time"])
-        .reset_index(drop=True)
-    )
+    group_columns = [*_stage_group_columns(aligned), "true_class", "time"]
+    summary = _subject_balanced_category_summary(aligned, group_columns)
+    summary = summary.sort_values(group_columns).reset_index(drop=True)
     return summary, state_names
 
 
@@ -140,11 +161,21 @@ def summarize_dominant_timecourse(state_traces: pd.DataFrame) -> pd.DataFrame:
     for keys, group in frame.groupby([*group_columns, "time"], sort=True):
         key_values = keys if isinstance(keys, tuple) else (keys,)
         group_values = dict(zip([*group_columns, "time"], key_values, strict=True))
-        means = group[columns].mean().to_numpy(dtype=float)
+        subject_posteriors = group.groupby("subject", sort=True)[columns].mean()
+        means = subject_posteriors.mean().to_numpy(dtype=float)
         order = np.argsort(means)
         dominant_index = int(order[-1])
         runner_up = float(means[order[-2]]) if len(order) > 1 else float("nan")
         dominant_class = state_names[dominant_index]
+        subject_viterbi_match = (
+            group.assign(viterbi_matches_dominant=group["viterbi_class"].astype(str) == dominant_class)
+            .groupby("subject", sort=True)["viterbi_matches_dominant"]
+            .mean()
+        )
+        if "viterbi_posterior" in group.columns:
+            viterbi_posterior_mean = float(group.groupby("subject", sort=True)["viterbi_posterior"].mean().mean())
+        else:
+            viterbi_posterior_mean = float(means[dominant_index])
         rows.append(
             {
                 "decoder": group_values.get("decoder", "decoder"),
@@ -155,9 +186,9 @@ def summarize_dominant_timecourse(state_traces: pd.DataFrame) -> pd.DataFrame:
                 "n_subjects": group["subject"].nunique(),
                 "n_sequences": group["sequence_key"].nunique(),
                 "posterior_true_class_mean": float(means[dominant_index]),
-                "posterior_true_class_sem": 0.0,
-                "viterbi_match_rate": float((group["viterbi_class"].astype(str) == dominant_class).mean()),
-                "viterbi_posterior_mean": float(group["viterbi_posterior"].mean()) if "viterbi_posterior" in group.columns else float(means[dominant_index]),
+                "posterior_true_class_sem": _time_sem(subject_posteriors.iloc[:, dominant_index]),
+                "viterbi_match_rate": float(subject_viterbi_match.mean()),
+                "viterbi_posterior_mean": viterbi_posterior_mean,
                 "posterior_margin": float(means[dominant_index] - runner_up) if len(order) > 1 else float("nan"),
             }
         )
