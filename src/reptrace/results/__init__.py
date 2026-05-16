@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from reptrace.results.tables import peak_metric_rows, summarize_metric_table
@@ -19,6 +20,7 @@ __all__ = [
 
 METRIC_COLUMNS = ("accuracy", "log_loss", "brier", "ece")
 SUMMARY_GROUP_COLUMNS = ("decoder", "emission_mode")
+WEIGHT_COLUMN = "n_test"
 
 
 def read_time_decode_results(
@@ -52,6 +54,37 @@ def read_time_decode_results(
     return pd.concat(frames, ignore_index=True)
 
 
+def _mean_across_folds(results: pd.DataFrame, group_columns: list[str]) -> pd.DataFrame:
+    """Average fold metrics, weighting by held-out sample count when available."""
+    metric_columns = list(METRIC_COLUMNS)
+    if WEIGHT_COLUMN not in results.columns:
+        return results.groupby(group_columns, as_index=False)[metric_columns].mean()
+
+    weighted = results.copy()
+    weights = pd.to_numeric(weighted[WEIGHT_COLUMN], errors="coerce")
+    if weights.isna().any() or not np.isfinite(weights).all() or (weights <= 0).any():
+        raise ValueError(f"Column '{WEIGHT_COLUMN}' must contain positive finite fold sizes.")
+    weighted["__fold_weight"] = weights.astype(float)
+
+    weighted_columns = []
+    denominator_columns = []
+    for metric in metric_columns:
+        values = pd.to_numeric(weighted[metric], errors="coerce")
+        weighted_column = f"__weighted_{metric}"
+        denominator_column = f"__weight_{metric}"
+        weighted[weighted_column] = values * weighted["__fold_weight"]
+        weighted[denominator_column] = weighted["__fold_weight"].where(values.notna())
+        weighted_columns.append(weighted_column)
+        denominator_columns.append(denominator_column)
+
+    aggregate_columns = [*weighted_columns, *denominator_columns]
+    grouped = weighted.groupby(group_columns, as_index=False)[aggregate_columns].sum()
+    for metric, weighted_column, denominator_column in zip(metric_columns, weighted_columns, denominator_columns):
+        grouped[metric] = grouped[weighted_column] / grouped[denominator_column]
+
+    return grouped[[*group_columns, *metric_columns]]
+
+
 def aggregate_time_decode_results(results: pd.DataFrame) -> pd.DataFrame:
     """Aggregate fold-level decoding results into time-level summary statistics."""
     missing = [column for column in ("subject", "time", *METRIC_COLUMNS) if column not in results.columns]
@@ -64,7 +97,7 @@ def aggregate_time_decode_results(results: pd.DataFrame) -> pd.DataFrame:
     group_columns = [column for column in SUMMARY_GROUP_COLUMNS if column in results.columns]
     subject_time_keys = [*group_columns, "subject", "time"]
     aggregate_keys = [*group_columns, "time"]
-    subject_time = results.groupby(subject_time_keys, as_index=False)[list(METRIC_COLUMNS)].mean().sort_values(subject_time_keys)
+    subject_time = _mean_across_folds(results, subject_time_keys).sort_values(subject_time_keys)
     grouped = subject_time.groupby(aggregate_keys, as_index=False)
     aggregated = grouped[list(METRIC_COLUMNS)].mean()
     n_subjects = grouped["subject"].nunique().rename(columns={"subject": "n_subjects"})
