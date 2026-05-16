@@ -97,6 +97,28 @@ def test_subject_time_effects_filters_decoder_and_emission_mode(tmp_path: Path):
     assert effects.loc["sub-01", 0.1] == pytest.approx(0.3)
 
 
+def test_subject_time_effects_uses_lower_is_better_direction(tmp_path: Path):
+    csv_path = tmp_path / "sub-01_time_decode.csv"
+    pd.DataFrame(
+        {
+            "subject": ["sub-01", "sub-01"],
+            "fold": [0, 1],
+            "time": [0.1, 0.1],
+            "accuracy": [0.5, 0.5],
+            "log_loss": [0.4, 0.2],
+            "brier": [0.4, 0.2],
+            "ece": [0.1, 0.1],
+            "n_test": [1, 1],
+        }
+    ).to_csv(csv_path, index=False)
+
+    auto_effects = subject_time_effects([csv_path], metric="brier", chance=0.5)
+    higher_override = subject_time_effects([csv_path], metric="brier", chance=0.5, metric_direction="higher")
+
+    assert auto_effects.loc["sub-01", 0.1] == pytest.approx(0.2)
+    assert higher_override.loc["sub-01", 0.1] == pytest.approx(-0.2)
+
+
 def test_subject_time_effects_requires_observations_for_ece(tmp_path: Path):
     csv_path = tmp_path / "sub-01_time_decode.csv"
     _write_subject_csv(csv_path, "sub-01", [0.0, 0.1, 0.2, 0.3])
@@ -139,7 +161,38 @@ def test_subject_time_effects_uses_exact_ece_observations(tmp_path: Path):
         ece_bins=2,
     )
 
-    assert effects.loc["sub-01", 0.1] == pytest.approx(0.1)
+    assert effects.loc["sub-01", 0.1] == pytest.approx(-0.1)
+
+
+def test_sign_flip_time_inference_reports_lower_is_better_direction(tmp_path: Path):
+    csv_paths = []
+    for idx in range(3):
+        csv_path = tmp_path / f"sub-{idx + 1:02d}_time_decode.csv"
+        pd.DataFrame(
+            {
+                "subject": [f"sub-{idx + 1:02d}", f"sub-{idx + 1:02d}"],
+                "fold": [0, 0],
+                "time": [0.1, 0.2],
+                "accuracy": [0.5, 0.5],
+                "log_loss": [0.42 - idx * 0.01, 0.32 - idx * 0.01],
+                "brier": [0.5, 0.5],
+                "ece": [0.1, 0.1],
+            }
+        ).to_csv(csv_path, index=False)
+        csv_paths.append(csv_path)
+
+    time_table, _ = sign_flip_time_inference(
+        csv_paths,
+        metric="log_loss",
+        chance=0.5,
+        n_permutations=128,
+        random_state=7,
+    )
+
+    assert time_table["metric_direction"].unique().tolist() == ["lower"]
+    assert time_table["reference_value"].unique().tolist() == [0.5]
+    assert time_table["log_loss_mean"].round(3).tolist() == [0.410, 0.310]
+    assert time_table["effect_mean"].round(3).tolist() == [0.090, 0.190]
 
 
 def test_sign_flip_time_inference_finds_cluster(tmp_path: Path):
@@ -156,3 +209,4 @@ def test_sign_flip_time_inference_finds_cluster(tmp_path: Path):
     assert cluster_table["cluster_p"].min() < 0.05
     assert cluster_table.loc[cluster_table["cluster_p"].idxmin(), "start_time"] == 0.05
     assert time_table["emission_mode"].unique().tolist() == ["calibrated"]
+    assert time_table["metric_direction"].unique().tolist() == ["higher"]
