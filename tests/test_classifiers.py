@@ -1,5 +1,7 @@
+import importlib.util
 import sys
 import warnings
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -12,8 +14,10 @@ from reptrace.decoding.classifiers import (
     should_use_default_classifier_param,
     train_binary_svm,
     train_classifier,
+    train_for_stimulus_lasso_glm,
     train_gradient_boosting,
     train_lasso_logistic,
+    train_multiclass_classifier,
 )
 
 
@@ -33,16 +37,21 @@ def multiclass_data():
     return features, labels
 
 
-def test_registry_contains_shared_sklearn_classifiers():
+def test_registry_contains_supported_classifiers():
     assert set(CLASSIFIER_REGISTRY) == {
         "always1Dummy",
+        "correlation-prototype",
         "gradient-boosting",
         "knn",
         "mostFrequentDummy",
         "multiclass-svm",
         "multiclass-svm-weighted",
+        "multinomial-logistic",
+        "pytorch-mlp",
         "random-forest",
         "scikit-mlp",
+        "shrinkage-lda",
+        "xgboost",
     }
 
 
@@ -50,36 +59,106 @@ def test_registry_trains_fast_sklearn_classifiers(multiclass_data):
     features, labels = multiclass_data
     classifier_params = {
         "always1Dummy": None,
+        "correlation-prototype": None,
         "gradient-boosting": 5,
         "knn": 1,
         "mostFrequentDummy": None,
         "multiclass-svm": 1.0,
         "multiclass-svm-weighted": 1.0,
+        "multinomial-logistic": 1.0,
         "random-forest": 5,
         "scikit-mlp": (5, 50),
+        "shrinkage-lda": None,
     }
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", ConvergenceWarning)
         for classifier, classifier_param in classifier_params.items():
-            model = train_classifier(features, labels, classifier, classifier_param, random_state=13)
+            model = train_multiclass_classifier(features, labels, classifier, classifier_param, random_state=13)
             assert len(model.predict(features)) == len(labels)
+
+
+def test_train_multiclass_classifier_encodes_nonzero_labels_and_decodes_outputs():
+    class EncodedBinaryModel:
+        def predict(self, features):
+            return np.arange(np.asarray(features).shape[0], dtype=int) % 2
+
+        def decision_function(self, features):
+            return np.asarray([0.25, -0.50], dtype=float)[: np.asarray(features).shape[0]]
+
+    seen = {}
+
+    def fake_train_classifier(_features, labels, _classifier, _classifier_param, *, random_state=None, registry=None):
+        del random_state, registry
+        seen["labels"] = np.asarray(labels, dtype=int).copy()
+        return EncodedBinaryModel()
+
+    with patch("reptrace.decoding.classifiers.train_classifier", side_effect=fake_train_classifier):
+        model = train_multiclass_classifier(
+            np.zeros((2, 2)),
+            np.asarray([10, 20], dtype=int),
+            "dummy-requires-zero-based-labels",
+            None,
+        )
+
+    np.testing.assert_array_equal(seen["labels"], np.asarray([0, 1], dtype=int))
+    np.testing.assert_array_equal(model.classes_, np.asarray([10, 20], dtype=int))
+    np.testing.assert_array_equal(model.predict(np.zeros((2, 2))), np.asarray([10, 20], dtype=int))
+    np.testing.assert_allclose(model.decision_function(np.zeros((2, 2))), np.asarray([[-0.25, 0.25], [0.50, -0.50]], dtype=float))
+
+
+def test_correlation_prototype_predicts_by_nearest_class_pattern():
+    features = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [1.0, 0.1, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.1],
+            [0.0, 0.0, 1.0],
+            [0.1, 0.0, 1.0],
+        ]
+    )
+    labels = np.array([0, 0, 1, 1, 2, 2])
+    model = train_multiclass_classifier(features, labels, "correlation-prototype", None)
+
+    predictions = model.predict(np.array([[0.9, 0.1, 0.0], [0.0, 0.2, 1.0]]))
+
+    np.testing.assert_array_equal(predictions, np.array([0, 2]))
+
+
+def test_shrinkage_lda_accepts_auto_and_numeric_shrinkage(multiclass_data):
+    features, labels = multiclass_data
+    for classifier_param in ("auto", 0.1, 0.5):
+        model = train_multiclass_classifier(features, labels, "shrinkage-lda", classifier_param)
+        assert len(model.predict(features)) == len(labels)
+
+
+def test_shrinkage_lda_rejects_invalid_numeric_shrinkage(multiclass_data):
+    features, labels = multiclass_data
+    with pytest.raises(ValueError, match="shrinkage-lda classifier_param"):
+        train_multiclass_classifier(features, labels, "shrinkage-lda", 1.5)
 
 
 def test_random_state_reproduces_stochastic_classifier_predictions(multiclass_data):
     features, labels = multiclass_data
 
-    model_a = train_classifier(features, labels, "random-forest", 5, random_state=7)
-    model_b = train_classifier(features, labels, "random-forest", 5, random_state=7)
+    model_a = train_multiclass_classifier(features, labels, "random-forest", 5, random_state=7)
+    model_b = train_multiclass_classifier(features, labels, "random-forest", 5, random_state=7)
 
     np.testing.assert_array_equal(model_a.predict(features), model_b.predict(features))
 
 
-def test_default_classifier_params_include_legacy_binary_helpers():
+def test_default_classifier_params_include_shared_and_legacy_helpers():
     assert get_default_classifier_param("multiclass-svm") == 0.5
     assert get_default_classifier_param("svm-binary") == 0.5
     assert get_default_classifier_param("binary-svm") == 0.5
     assert get_default_classifier_param("lasso") == 0.005
+    assert get_default_classifier_param("multinomial-logistic") == 1.0
+    assert get_default_classifier_param("correlation-prototype") is None
+    assert get_default_classifier_param("shrinkage-lda") is None
+    pytorch_params = get_default_classifier_param("pytorch-mlp")
+    pytorch_params["hidden_dim"] = 1
+    assert get_default_classifier_param("pytorch-mlp")["hidden_dim"] == 720
     assert should_use_default_classifier_param(np.nan)
     assert not should_use_default_classifier_param(None)
     assert not should_use_default_classifier_param({"hidden_dim": 10})
@@ -93,6 +172,7 @@ def test_binary_helper_trainers_fit_binary_labels():
         lambda: train_binary_svm(features, labels, 1.0, random_state=13),
         lambda: train_lasso_logistic(features, labels, 0.1, random_state=13),
         lambda: train_gradient_boosting(features, labels, 5, random_state=13),
+        lambda: train_for_stimulus_lasso_glm(features, labels, 0.1, random_state=13),
     )
 
     for build_model in helpers:
@@ -119,7 +199,7 @@ def test_prediction_scores_returns_nan_without_score_api():
     assert np.isnan(scores).tolist() == [True, True, True]
 
 
-def test_optional_non_sklearn_dependencies_are_not_imported(multiclass_data):
+def test_optional_ml_dependencies_are_lazy_imported(multiclass_data):
     features, labels = multiclass_data
 
     train_classifier(features, labels, "multiclass-svm", 1.0)
@@ -127,6 +207,23 @@ def test_optional_non_sklearn_dependencies_are_not_imported(multiclass_data):
     assert "xgboost" not in sys.modules
     assert "torch" not in sys.modules
     assert "pytorch_lightning" not in sys.modules
+
+
+def test_seeded_torch_data_loaders_are_reproducible():
+    if importlib.util.find_spec("torch") is None:
+        pytest.skip("PyTorch dependencies are not installed: No module named 'torch'")
+    from reptrace.decoding.classifiers import _build_pytorch_data_loaders
+
+    features = np.arange(40).reshape(20, 2)
+    labels = np.arange(20)
+
+    first_loaders = _build_pytorch_data_loaders(features, labels, random_seed=123)
+    second_loaders = _build_pytorch_data_loaders(features, labels, random_seed=123)
+
+    def labels_by_loader(loaders):
+        return [[batch_labels.tolist() for _, batch_labels in loader] for loader in loaders]
+
+    assert labels_by_loader(first_loaders) == labels_by_loader(second_loaders)
 
 
 def test_unsupported_classifier_error_lists_supported_names(multiclass_data):
