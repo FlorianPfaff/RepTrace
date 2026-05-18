@@ -158,6 +158,54 @@ events = match_stimulus_annotations(
 summary = summarize_stimulus_events(events, annotations=annotations)
 ```
 
+## Matched-filter event detection
+
+The baseline detector searches for contiguous above-threshold runs. For noisier
+continuous streams, RepTrace also exposes a matched-filter detector that learns a
+class-specific probability template from annotated event-locked traces and then
+scores each candidate onset by the temporal shape of the local evidence trace.
+This can detect reproducible event-like probability trajectories even when a
+single time bin is not a strong standalone threshold crossing.
+
+```python
+from reptrace.stimulus_detection import (
+    detect_matched_filter_stimulus_events,
+    fit_matched_filter_thresholds,
+    fit_stimulus_event_templates,
+)
+
+templates = fit_stimulus_event_templates(
+    observations=train_observations,
+    annotations=train_annotations,
+    template_window=(0.0, 0.3),
+    template_step=0.1,
+    target_classes=["face"],
+    stream_columns=("stream_id",),
+)
+
+thresholds = fit_matched_filter_thresholds(
+    observations=scan_observations,
+    templates=templates,
+    threshold_window=(-0.35, -0.05),
+    threshold_quantile=0.95,
+    stream_columns=("stream_id",),
+)
+
+events = detect_matched_filter_stimulus_events(
+    scan_observations,
+    templates=templates,
+    thresholds=thresholds,
+    stream_columns=("stream_id",),
+    detection_window=(0.0, float("inf")),
+    refractory=0.20,
+)
+```
+
+Templates should be estimated from independent annotated training data or from a
+proper inner training split. Do not fit templates from held-out evaluation
+annotations unless the goal is an oracle diagnostic rather than a deployable
+detector.
+
 ## Choosing a score mode
 
 `score_mode="class_probability"` scans each `prob_class_*` column as a separate

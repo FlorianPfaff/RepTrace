@@ -24,11 +24,31 @@ if __name__ == "reptrace._stimulus_detection_legacy":
     )
 else:
     from reptrace._stimulus_detection_public import *  # noqa: F401,F403
-    from reptrace._stimulus_detection_public import __all__ as __all__
+    from reptrace._stimulus_detection_public import __all__ as _public_all
     from reptrace._stimulus_detection_public import main
+    from reptrace.matched_filter_detection import (  # noqa: F401
+        MATCHED_FILTER_SCORE_COLUMN,
+        MATCHED_FILTER_SCORE_MODE,
+        MATCHED_FILTER_THRESHOLD_METHOD,
+        detect_matched_filter_stimulus_events,
+        fit_matched_filter_thresholds,
+        fit_stimulus_event_templates,
+        score_stimulus_event_templates,
+    )
 
     # Backwards-compatible private helpers used by the streaming detector.
     from reptrace._stimulus_detection_public import _event_row, _run_duration  # noqa: F401
+
+    __all__ = [
+        *_public_all,
+        "MATCHED_FILTER_SCORE_COLUMN",
+        "MATCHED_FILTER_SCORE_MODE",
+        "MATCHED_FILTER_THRESHOLD_METHOD",
+        "detect_matched_filter_stimulus_events",
+        "fit_matched_filter_thresholds",
+        "fit_stimulus_event_templates",
+        "score_stimulus_event_templates",
+    ]
 
     if __name__ == "__main__":  # pragma: no cover
         raise SystemExit(main())
