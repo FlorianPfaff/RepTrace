@@ -26,6 +26,7 @@ nav:
       - Onset Workflow: reference/onset-workflow.md
       - Onset Sensitivity: reference/onset-sensitivity.md
       - Paired Statistics: reference/paired-stats.md
+      - THINGS-EEG2 Staging: reference/stage-things-eeg2.md
       - Temporal State Workflow: reference/temporal-state-workflow.md
       - Results: reference/results.md
       - Semantic Stages: reference/semantic-stages.md
