@@ -85,15 +85,16 @@ def _tuning_metadata(
     tuning_scoring: str,
     tuning_c_grid: Sequence[float],
 ) -> dict[str, object]:
-    if not tune_hyperparameters:
-        return {}
     metadata: dict[str, object] = {
-        "tuned_hyperparameters": True,
-        "tuning_cv_splits": int(tuning_cv_splits),
-        "tuning_scoring": tuning_scoring,
-        "tuning_c_grid": "|".join(str(value) for value in tuning_c_grid),
-        "best_params": _best_params_json(models),
+        "tuned_hyperparameters": bool(tune_hyperparameters),
+        "tuning_cv_splits": int(tuning_cv_splits) if tune_hyperparameters else "",
+        "tuning_scoring": tuning_scoring if tune_hyperparameters else "",
+        "tuning_c_grid": "|".join(str(value) for value in tuning_c_grid) if tune_hyperparameters else "",
+        "best_params": "",
     }
+    if not tune_hyperparameters:
+        return metadata
+    metadata["best_params"] = _best_params_json(models)
     scores = _best_scores(models)
     if len(scores) == 1:
         metadata["best_score"] = scores[0]
@@ -228,6 +229,7 @@ def _append_decoded_outputs(
     preprocessing_hash: str,
     model_hash: str,
     temporal_mode: str,
+    temporal_train_window: TemporalTrainWindow | None,
     train_time: float,
     train_window_start: float,
     train_window_stop: float,
@@ -248,6 +250,8 @@ def _append_decoded_outputs(
         "feature_preprocessor": feature_preprocessor_name,
         "pca_components": "" if pca_components_value is None else pca_components_value,
         "temporal_mode": temporal_mode,
+        "temporal_train_window_start": "" if temporal_train_window is None else temporal_train_window[0],
+        "temporal_train_window_stop": "" if temporal_train_window is None else temporal_train_window[1],
         "train_time": train_time,
         "time": center,
         "test_time": center,
@@ -277,6 +281,8 @@ def _append_decoded_outputs(
                 "feature_preprocessor": feature_preprocessor_name,
                 "pca_components": "" if pca_components_value is None else pca_components_value,
                 "temporal_mode": temporal_mode,
+                "temporal_train_window_start": "" if temporal_train_window is None else temporal_train_window[0],
+                "temporal_train_window_stop": "" if temporal_train_window is None else temporal_train_window[1],
                 "train_time": train_time,
                 "time": center,
                 "test_time": center,
@@ -303,6 +309,8 @@ def _append_decoded_outputs(
                 "feature_preprocessor": feature_preprocessor_name,
                 "pca_components": "" if pca_components_value is None else pca_components_value,
                 "temporal_mode": temporal_mode,
+                "temporal_train_window_start": "" if temporal_train_window is None else temporal_train_window[0],
+                "temporal_train_window_stop": "" if temporal_train_window is None else temporal_train_window[1],
                 "train_time": train_time,
                 "test_time": center,
                 "time": center,
@@ -523,6 +531,7 @@ def run_time_resolved_decode(
                         preprocessing_hash=preprocessing_hash,
                         model_hash=current_model_hash,
                         temporal_mode=temporal_mode,
+                        temporal_train_window=normalized_temporal_train_window,
                         train_time=center,
                         train_window_start=float(epochs.times[start]),
                         train_window_stop=float(epochs.times[stop - 1]),
@@ -627,6 +636,7 @@ def run_time_resolved_decode(
                         preprocessing_hash=preprocessing_hash,
                         model_hash=current_model_hash,
                         temporal_mode=temporal_mode,
+                        temporal_train_window=normalized_temporal_train_window,
                         train_time=train_time,
                         train_window_start=train_window_start,
                         train_window_stop=train_window_stop,

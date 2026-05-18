@@ -28,9 +28,72 @@ __all__ = [
 ]
 
 METRIC_COLUMNS = ("accuracy", "log_loss", "brier", "ece")
-SUMMARY_GROUP_COLUMNS = ("decoder", "emission_mode", "temporal_mode")
+SUMMARY_GROUP_COLUMNS = (
+    "decoder",
+    "emission_mode",
+    "feature_preprocessor",
+    "pca_components",
+    "tuned_hyperparameters",
+    "tuning_cv_splits",
+    "tuning_scoring",
+    "tuning_c_grid",
+    "temporal_mode",
+    "temporal_train_window_start",
+    "temporal_train_window_stop",
+    "temporal_smoothing_method",
+    "temporal_smoothing_fit_window_start",
+    "temporal_smoothing_fit_window_stop",
+)
 WEIGHT_COLUMN = "n_test"
 DEFAULT_ECE_BINS = 10
+GROUP_COLUMN_DEFAULTS = {
+    "emission_mode": "calibrated",
+    "feature_preprocessor": "none",
+    "pca_components": "",
+    "tuned_hyperparameters": False,
+    "tuning_cv_splits": "",
+    "tuning_scoring": "",
+    "tuning_c_grid": "",
+    "temporal_mode": "same_time",
+    "temporal_train_window_start": "",
+    "temporal_train_window_stop": "",
+    "temporal_smoothing_method": "none",
+    "temporal_smoothing_fit_window_start": "",
+    "temporal_smoothing_fit_window_stop": "",
+}
+
+
+def _truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None or pd.isna(value):
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _normalize_group_defaults(frame: pd.DataFrame) -> pd.DataFrame:
+    normalized = frame.copy()
+    for column, default in GROUP_COLUMN_DEFAULTS.items():
+        if column not in normalized.columns:
+            normalized[column] = default
+            continue
+        if column == "tuned_hyperparameters":
+            normalized[column] = normalized[column].map(_truthy)
+            continue
+        values = normalized[column].where(pd.notna(normalized[column]), default).astype(str)
+        normalized[column] = values.mask(values.str.len() == 0, default)
+    ensemble = normalized["temporal_mode"].astype(str) == "train_window_ensemble"
+    if "train_window_start" in normalized.columns:
+        values = normalized["temporal_train_window_start"]
+        normalized.loc[ensemble & (values.astype(str).str.len() == 0), "temporal_train_window_start"] = normalized.loc[
+            ensemble, "train_window_start"
+        ].astype(str)
+    if "train_window_stop" in normalized.columns:
+        values = normalized["temporal_train_window_stop"]
+        normalized.loc[ensemble & (values.astype(str).str.len() == 0), "temporal_train_window_stop"] = normalized.loc[
+            ensemble, "train_window_stop"
+        ].astype(str)
+    return normalized
 
 
 def read_time_decode_results(
@@ -56,8 +119,7 @@ def read_time_decode_results(
             frame["subject"] = csv_path.stem
         else:
             frame["subject"] = frame["subject"].astype(str)
-        if "emission_mode" not in frame.columns:
-            frame["emission_mode"] = "calibrated"
+        frame = _normalize_group_defaults(frame)
         frame["source_file"] = csv_path.name
         frames.append(frame)
 
@@ -103,11 +165,7 @@ def read_probability_observations(
 
         frame["subject"] = frame["subject"].where(pd.notna(frame["subject"]), fallback_subject).astype(str)
         frame.loc[frame["subject"].str.len() == 0, "subject"] = fallback_subject
-        if "emission_mode" not in frame.columns:
-            frame["emission_mode"] = "calibrated"
-        else:
-            frame["emission_mode"] = frame["emission_mode"].where(pd.notna(frame["emission_mode"]), "calibrated").astype(str)
-            frame.loc[frame["emission_mode"].str.len() == 0, "emission_mode"] = "calibrated"
+        frame = _normalize_group_defaults(frame)
         frame["source_file"] = csv_path.name
         frames.append(frame)
 
@@ -192,12 +250,7 @@ mean_across_folds = _mean_across_folds
 
 
 def _normalize_emission_mode(frame: pd.DataFrame) -> pd.DataFrame:
-    if "emission_mode" not in frame.columns:
-        return frame
-    normalized = frame.copy()
-    normalized["emission_mode"] = normalized["emission_mode"].where(pd.notna(normalized["emission_mode"]), "calibrated").astype(str)
-    normalized.loc[normalized["emission_mode"].str.len() == 0, "emission_mode"] = "calibrated"
-    return normalized
+    return _normalize_group_defaults(frame)
 
 
 def _prepare_observations_for_subject_time(

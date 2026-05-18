@@ -20,6 +20,13 @@ def _noisy_observation_frame() -> pd.DataFrame:
                     "decoder": "logistic",
                     "backend": "sklearn",
                     "emission_mode": "calibrated",
+                    "feature_preprocessor": "pca_whiten",
+                    "pca_components": "0.95",
+                    "tuned_hyperparameters": True,
+                    "tuning_cv_splits": 2,
+                    "tuning_scoring": "balanced_accuracy",
+                    "tuning_c_grid": "0.1|1.0",
+                    "temporal_mode": "same_time",
                     "train_time": time,
                     "test_time": time,
                     "time": time,
@@ -72,4 +79,7 @@ def test_temporal_smoothing_exports_posteriors_and_metrics(tmp_path: Path):
     metric_row = metrics.loc[metrics["time"].eq(0.30)].iloc[0]
     assert metric_row["accuracy"] == 1.0
     assert metric_row["emission_mode"] == "calibrated_temporal_posterior"
+    assert metric_row["feature_preprocessor"] == "pca_whiten"
+    assert str(metric_row["tuned_hyperparameters"]).lower() == "true"
+    assert metric_row["temporal_mode"] == "same_time"
     assert "temporal_smoothing_stay_probability" in metrics.columns

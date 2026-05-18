@@ -28,6 +28,41 @@ from reptrace.temporal_model import (
 DEFAULT_FIT_WINDOW = (0.1, 0.8)
 DEFAULT_EMISSION_SUFFIX = "temporal_posterior"
 SMOOTHING_METHOD = "sticky_forward_backward"
+SMOOTHING_GROUP_COLUMNS = (
+    "decoder",
+    "emission_mode",
+    "feature_preprocessor",
+    "pca_components",
+    "tuned_hyperparameters",
+    "tuning_cv_splits",
+    "tuning_scoring",
+    "tuning_c_grid",
+    "temporal_mode",
+    "temporal_train_window_start",
+    "temporal_train_window_stop",
+)
+METRIC_GROUP_COLUMNS = (
+    "subject",
+    "fold",
+    *SMOOTHING_GROUP_COLUMNS,
+    "train_time",
+    "test_time",
+    "time",
+    "window_start",
+    "window_stop",
+)
+METRIC_PROVENANCE_COLUMNS = (
+    "split_id",
+    "seed",
+    "backend",
+    "preprocessing_hash",
+    "model_hash",
+    "base_emission_mode",
+    "temporal_smoothing_method",
+    "temporal_smoothing_stay_probability",
+    "temporal_smoothing_fit_window_start",
+    "temporal_smoothing_fit_window_stop",
+)
 
 
 def _iter_groups(frame: pd.DataFrame, columns: list[str]) -> Iterable[tuple[object, pd.DataFrame]]:
@@ -42,6 +77,10 @@ def _group_values(columns: list[str], key: object) -> dict[str, object]:
         return {}
     key_values = key if isinstance(key, tuple) else (key,)
     return dict(zip(columns, key_values, strict=True))
+
+
+def _smoothing_group_columns(frame: pd.DataFrame) -> list[str]:
+    return [column for column in SMOOTHING_GROUP_COLUMNS if column in frame.columns]
 
 
 def _smoothed_emission_mode(base_mode: object, suffix: str) -> str:
@@ -136,21 +175,7 @@ def metrics_from_probability_observations(observations: pd.DataFrame, *, ece_bin
     if working[prob_columns].isna().any().any():
         raise ValueError("prob_class_* columns must be numeric and non-missing.")
 
-    group_columns = [
-        column
-        for column in (
-            "subject",
-            "fold",
-            "decoder",
-            "emission_mode",
-            "train_time",
-            "test_time",
-            "time",
-            "window_start",
-            "window_stop",
-        )
-        if column in working.columns
-    ]
+    group_columns = [column for column in METRIC_GROUP_COLUMNS if column in working.columns]
     if "time" not in group_columns:
         raise ValueError("Probability observations must contain a time column.")
 
@@ -172,18 +197,7 @@ def metrics_from_probability_observations(observations: pd.DataFrame, *, ece_bin
                 "class_names": "|".join(map(str, class_names)),
             }
         )
-        for optional_column in (
-            "split_id",
-            "seed",
-            "backend",
-            "preprocessing_hash",
-            "model_hash",
-            "base_emission_mode",
-            "temporal_smoothing_method",
-            "temporal_smoothing_stay_probability",
-            "temporal_smoothing_fit_window_start",
-            "temporal_smoothing_fit_window_stop",
-        ):
+        for optional_column in METRIC_PROVENANCE_COLUMNS:
             if optional_column not in group.columns:
                 continue
             values = group[optional_column].dropna().astype(str).unique()
@@ -215,7 +229,7 @@ def smooth_probability_observations(
     observations = read_probability_observations(observation_csvs).copy()
     observations["__input_order"] = np.arange(len(observations))
     prob_columns = probability_columns(observations)
-    group_columns = _model_group_columns(observations)
+    group_columns = _smoothing_group_columns(observations) or _model_group_columns(observations)
     smoothed_frames: list[pd.DataFrame] = []
 
     for _, decoder_frame in _iter_groups(observations, group_columns):

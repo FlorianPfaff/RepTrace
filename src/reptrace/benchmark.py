@@ -11,9 +11,21 @@ from reptrace.metadata import prepare_binary_metadata
 from reptrace.mne_time_decode import run_time_resolved_decode
 from reptrace.plot_time_decode import plot_time_decode_results
 from reptrace.results import aggregate_time_decode_csvs
-from reptrace.decoding import DECODER_CHOICES, EMISSION_MODE_CHOICES, normalize_decoder_name, normalize_emission_mode
+from reptrace.temporal_smoothing import DEFAULT_EMISSION_SUFFIX, DEFAULT_FIT_WINDOW, smooth_probability_observations
+from reptrace.decoding import (
+    DECODER_CHOICES,
+    EMISSION_MODE_CHOICES,
+    FEATURE_PREPROCESSOR_CHOICES,
+    TUNING_SCORING_CHOICES,
+    normalize_decoder_name,
+    normalize_emission_mode,
+    normalize_feature_preprocessor,
+    normalize_tuning_scoring,
+    parse_c_grid,
+)
 
 EMISSION_RUN_CHOICES = (*EMISSION_MODE_CHOICES, "both")
+TemporalTrainWindow = tuple[float, float]
 
 
 @dataclass(frozen=True)
@@ -26,6 +38,8 @@ class BenchmarkRun:
     calibration_csvs: list[Path]
     observation_csvs: list[Path]
     skipped_existing: int = 0
+    smoothed_observation_csv: Path | None = None
+    smoothed_metric_csv: Path | None = None
 
 
 def _missing(value: Any) -> bool:
@@ -55,6 +69,26 @@ def _bool_value(row: pd.Series, column: str, default: bool = False) -> bool:
     return value.lower() in {"1", "true", "yes", "y"}
 
 
+def _temporal_train_window_value(
+    row: pd.Series,
+    default: TemporalTrainWindow | None = None,
+) -> TemporalTrainWindow | None:
+    start = _float_value(row, "temporal_train_window_start")
+    stop = _float_value(row, "temporal_train_window_stop")
+    if start is not None or stop is not None:
+        if start is None or stop is None:
+            raise ValueError("Manifest must set both temporal_train_window_start and temporal_train_window_stop.")
+        return (start, stop)
+
+    value = _string_value(row, "temporal_train_window")
+    if value is None:
+        return default
+    parts = value.replace(",", " ").replace("|", " ").split()
+    if len(parts) != 2:
+        raise ValueError("temporal_train_window must contain exactly two values: START STOP.")
+    return (float(parts[0]), float(parts[1]))
+
+
 def _resolve_path(value: str | None, base_dir: Path) -> Path | None:
     if value is None:
         return None
@@ -79,7 +113,11 @@ def _required_path(row: pd.Series, column: str, base_dir: Path) -> Path:
 
 
 def _safe_name(value: str) -> str:
-    return value.lower().replace("-", "_").replace(" ", "_")
+    return value.lower().replace("-", "_").replace(" ", "_").replace(".", "p").replace("|", "_")
+
+
+def _safe_window_name(window: TemporalTrainWindow) -> str:
+    return f"trainwin{_safe_name(f'{window[0]:g}')}_{_safe_name(f'{window[1]:g}')}"
 
 
 def _decoder_output_stem(subject: str, decoder: str, has_decoder_column: bool) -> str:
@@ -93,12 +131,36 @@ def _output_stem(
     *,
     has_decoder_column: bool,
     has_emission_mode_column: bool,
+    variant: str | None = None,
+    feature_preprocessor: str = "none",
+    pca_components: str | None = None,
+    tune_hyperparameters: bool = False,
+    tuning_scoring: str = "accuracy",
+    temporal_train_window: TemporalTrainWindow | None = None,
+    has_feature_preprocessor_column: bool = False,
+    has_pca_components_column: bool = False,
+    has_tune_hyperparameters_column: bool = False,
+    has_tuning_scoring_column: bool = False,
+    has_temporal_train_window_column: bool = False,
 ) -> str:
     parts = [subject]
+    if variant is not None:
+        parts.append(_safe_name(variant))
+        return "_".join(parts)
     if has_decoder_column:
         parts.append(_safe_name(decoder))
     if has_emission_mode_column:
         parts.append(_safe_name(emission_mode))
+    if has_feature_preprocessor_column:
+        parts.append(_safe_name(feature_preprocessor))
+    if has_pca_components_column and pca_components is not None:
+        parts.append(f"pca{_safe_name(str(pca_components))}")
+    if has_tune_hyperparameters_column:
+        parts.append("tuned" if tune_hyperparameters else "untuned")
+    if has_tuning_scoring_column and tune_hyperparameters:
+        parts.append(_safe_name(tuning_scoring))
+    if has_temporal_train_window_column and temporal_train_window is not None:
+        parts.append(_safe_window_name(temporal_train_window))
     return "_".join(parts)
 
 
@@ -151,9 +213,20 @@ def run_benchmark_manifest(
     default_max_iter: int = 1000,
     default_decoder: str = "logistic",
     default_emission_mode: str = "calibrated",
+    default_feature_preprocessor: str = "none",
+    default_pca_components: str | None = None,
+    default_tune_hyperparameters: bool = False,
+    default_tuning_cv_splits: int = 3,
+    default_tuning_scoring: str = "accuracy",
+    default_tuning_c_grid: str | None = None,
+    default_temporal_train_window: TemporalTrainWindow | None = None,
     calibration_dir: Path | None = None,
     calibration_bins: int = 10,
     observation_dir: Path | None = None,
+    temporal_smoothing_dir: Path | None = None,
+    temporal_smoothing_fit_window: tuple[float, float] | None = DEFAULT_FIT_WINDOW,
+    temporal_smoothing_stay_grid_size: int = 200,
+    temporal_smoothing_emission_suffix: str = DEFAULT_EMISSION_SUFFIX,
     resume: bool = False,
 ) -> BenchmarkRun:
     """Run a manifest-defined benchmark and optionally aggregate and plot results."""
@@ -163,6 +236,8 @@ def run_benchmark_manifest(
 
     manifest_dir = manifest_csv.parent
     out_dir.mkdir(parents=True, exist_ok=True)
+    if temporal_smoothing_dir is not None and observation_dir is None:
+        observation_dir = out_dir / "observations"
     result_csvs: list[Path] = []
     calibration_csvs: list[Path] = []
     observation_csvs: list[Path] = []
@@ -180,12 +255,38 @@ def run_benchmark_manifest(
         emission_mode = _string_value(row, "emission_mode", default_emission_mode) or default_emission_mode
         if emission_mode != "both":
             emission_mode = normalize_emission_mode(emission_mode)
+        feature_preprocessor = normalize_feature_preprocessor(
+            _string_value(row, "feature_preprocessor", default_feature_preprocessor) or default_feature_preprocessor
+        )
+        pca_components = _string_value(row, "pca_components", default_pca_components)
+        tune_hyperparameters = _bool_value(row, "tune_hyperparameters", default_tune_hyperparameters)
+        tuning_cv_splits = _int_value(row, "tuning_cv_splits", default_tuning_cv_splits)
+        tuning_scoring = normalize_tuning_scoring(
+            _string_value(row, "tuning_scoring", default_tuning_scoring) or default_tuning_scoring
+        )
+        tuning_c_grid = _string_value(row, "tuning_c_grid", default_tuning_c_grid)
+        temporal_train_window = _temporal_train_window_value(row, default_temporal_train_window)
         output_stem = _output_stem(
             subject,
             decoder,
             emission_mode,
             has_decoder_column="decoder" in manifest.columns,
             has_emission_mode_column="emission_mode" in manifest.columns,
+            variant=_string_value(row, "variant"),
+            feature_preprocessor=feature_preprocessor,
+            pca_components=pca_components,
+            tune_hyperparameters=tune_hyperparameters,
+            tuning_scoring=tuning_scoring,
+            temporal_train_window=temporal_train_window,
+            has_feature_preprocessor_column="feature_preprocessor" in manifest.columns,
+            has_pca_components_column="pca_components" in manifest.columns,
+            has_tune_hyperparameters_column="tune_hyperparameters" in manifest.columns,
+            has_tuning_scoring_column="tuning_scoring" in manifest.columns,
+            has_temporal_train_window_column=bool(
+                {"temporal_train_window", "temporal_train_window_start", "temporal_train_window_stop"}.intersection(
+                    manifest.columns
+                )
+            ),
         )
 
         output_csv = _resolve_path(_string_value(row, "out_csv"), manifest_dir)
@@ -228,6 +329,13 @@ def run_benchmark_manifest(
             max_iter=_int_value(row, "max_iter", default_max_iter),
             decoder=decoder,
             emission_mode=emission_mode,
+            feature_preprocessor=feature_preprocessor,
+            pca_components=pca_components,
+            tune_hyperparameters=tune_hyperparameters,
+            tuning_cv_splits=tuning_cv_splits,
+            tuning_scoring=tuning_scoring,
+            tuning_c_grid=tuning_c_grid,
+            temporal_train_window=temporal_train_window,
             calibration_out_path=calibration_out_csv,
             calibration_bins=_int_value(row, "calibration_bins", calibration_bins),
             observation_out_path=observation_out_csv,
@@ -245,12 +353,34 @@ def run_benchmark_manifest(
         results.to_csv(output_csv, index=False)
         result_csvs.append(output_csv)
 
+    aggregate_result_csvs = list(result_csvs)
+    aggregate_observation_csvs = list(observation_csvs)
+    smoothed_observation_csv: Path | None = None
+    smoothed_metric_csv: Path | None = None
+    if temporal_smoothing_dir is not None:
+        if not observation_csvs:
+            raise ValueError("Temporal smoothing requires probability observations; pass --observation-dir.")
+        smoothed_observation_csv = temporal_smoothing_dir / "smoothed_observations.csv"
+        smoothed_metric_csv = temporal_smoothing_dir / "smoothed_metrics.csv"
+        if not (resume and _usable_file(smoothed_observation_csv) and _usable_file(smoothed_metric_csv)):
+            smooth_probability_observations(
+                observation_csvs,
+                fit_window=temporal_smoothing_fit_window,
+                stay_grid_size=temporal_smoothing_stay_grid_size,
+                emission_suffix=temporal_smoothing_emission_suffix,
+                ece_bins=calibration_bins,
+                out_observations=smoothed_observation_csv,
+                out_metrics=smoothed_metric_csv,
+            )
+        aggregate_result_csvs.append(smoothed_metric_csv)
+        aggregate_observation_csvs.append(smoothed_observation_csv)
+
     if aggregate_out is None:
         aggregate_out = out_dir / "summary.csv"
     aggregate = aggregate_time_decode_csvs(
-        result_csvs,
+        aggregate_result_csvs,
         out_path=aggregate_out,
-        observation_csv_paths=observation_csvs or None,
+        observation_csv_paths=aggregate_observation_csvs or None,
     )
     aggregate_path: Path | None = aggregate_out
 
@@ -271,6 +401,8 @@ def run_benchmark_manifest(
         calibration_csvs=calibration_csvs,
         observation_csvs=observation_csvs,
         skipped_existing=skipped_existing,
+        smoothed_observation_csv=smoothed_observation_csv,
+        smoothed_metric_csv=smoothed_metric_csv,
     )
 
 
@@ -294,9 +426,25 @@ def main() -> None:
     parser.add_argument("--max-iter", type=int, default=1000)
     parser.add_argument("--decoder", choices=DECODER_CHOICES, default="logistic")
     parser.add_argument("--emission-mode", choices=EMISSION_RUN_CHOICES, default="calibrated")
+    parser.add_argument("--feature-preprocessor", choices=(*FEATURE_PREPROCESSOR_CHOICES, "pca-whiten"), default="none")
+    parser.add_argument("--pca-components")
+    parser.add_argument("--tune-hyperparameters", action="store_true")
+    parser.add_argument("--tuning-cv-splits", type=int, default=3)
+    parser.add_argument("--tuning-scoring", choices=TUNING_SCORING_CHOICES, default="accuracy")
+    parser.add_argument("--tuning-c-grid", default=",".join(str(value) for value in parse_c_grid(None)))
+    parser.add_argument("--temporal-train-window", type=float, nargs=2, metavar=("START", "STOP"))
     parser.add_argument("--calibration-dir", type=Path)
     parser.add_argument("--calibration-bins", type=int, default=10)
     parser.add_argument("--observation-dir", type=Path, help="Optional directory for held-out trial/time probability observation CSVs.")
+    parser.add_argument("--temporal-smoothing-dir", type=Path, help="Optional directory for smoothed observations and metrics.")
+    parser.add_argument("--temporal-smoothing-fit-window", type=float, nargs=2, default=DEFAULT_FIT_WINDOW, metavar=("START", "STOP"))
+    parser.add_argument(
+        "--temporal-smoothing-full-sequence-fit",
+        action="store_true",
+        help="Fit temporal smoothing on every available time bin instead of --temporal-smoothing-fit-window.",
+    )
+    parser.add_argument("--temporal-smoothing-stay-grid-size", type=int, default=200)
+    parser.add_argument("--temporal-smoothing-emission-suffix", default=DEFAULT_EMISSION_SUFFIX)
     parser.add_argument(
         "--resume",
         action="store_true",
@@ -321,9 +469,22 @@ def main() -> None:
         default_max_iter=args.max_iter,
         default_decoder=args.decoder,
         default_emission_mode=args.emission_mode,
+        default_feature_preprocessor=args.feature_preprocessor,
+        default_pca_components=args.pca_components,
+        default_tune_hyperparameters=args.tune_hyperparameters,
+        default_tuning_cv_splits=args.tuning_cv_splits,
+        default_tuning_scoring=args.tuning_scoring,
+        default_tuning_c_grid=args.tuning_c_grid,
+        default_temporal_train_window=tuple(args.temporal_train_window) if args.temporal_train_window is not None else None,
         calibration_dir=args.calibration_dir,
         calibration_bins=args.calibration_bins,
         observation_dir=args.observation_dir,
+        temporal_smoothing_dir=args.temporal_smoothing_dir,
+        temporal_smoothing_fit_window=None
+        if args.temporal_smoothing_full_sequence_fit
+        else tuple(args.temporal_smoothing_fit_window),
+        temporal_smoothing_stay_grid_size=args.temporal_smoothing_stay_grid_size,
+        temporal_smoothing_emission_suffix=args.temporal_smoothing_emission_suffix,
         resume=args.resume,
     )
     if run.skipped_existing:
@@ -337,6 +498,10 @@ def main() -> None:
         print(f"Wrote {len(run.calibration_csvs)} calibration bin file(s).")
     if run.observation_csvs:
         print(f"Wrote {len(run.observation_csvs)} probability observation file(s).")
+    if run.smoothed_observation_csv is not None:
+        print(f"Wrote smoothed observations: {run.smoothed_observation_csv}")
+    if run.smoothed_metric_csv is not None:
+        print(f"Wrote smoothed metrics: {run.smoothed_metric_csv}")
 
 
 if __name__ == "__main__":
