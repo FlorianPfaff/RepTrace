@@ -22,6 +22,7 @@ from reptrace.decoding.sampling import (
 DECODER_CHOICES = ("logistic", "lda", "linear_svm")
 EMISSION_MODE_CHOICES = ("calibrated", "uncalibrated")
 FEATURE_PREPROCESSOR_CHOICES = ("none", "pca", "pca_whiten")
+CALIBRATION_METHOD_CHOICES = ("sigmoid", "isotonic")
 
 
 def make_logistic_decoder(
@@ -29,6 +30,7 @@ def make_logistic_decoder(
     *,
     feature_preprocessor: str = "none",
     pca_components: int | float | str | None = None,
+    regularization_c: int | float | str = 1.0,
 ):
     """Create the default calibrated-probability baseline decoder."""
     return make_decoder(
@@ -36,6 +38,7 @@ def make_logistic_decoder(
         max_iter=max_iter,
         feature_preprocessor=feature_preprocessor,
         pca_components=pca_components,
+        regularization_c=regularization_c,
     )
 
 
@@ -46,6 +49,9 @@ def make_decoder(
     emission_mode: str = "calibrated",
     feature_preprocessor: str = "none",
     pca_components: int | float | str | None = None,
+    regularization_c: int | float | str = 1.0,
+    lda_shrinkage: str | float | None = None,
+    calibration_method: str = "sigmoid",
 ):
     """Create a standard probability-producing decoder by name.
 
@@ -55,6 +61,9 @@ def make_decoder(
     """
     normalized = normalize_decoder_name(name)
     emission_mode = normalize_emission_mode(emission_mode)
+    regularization_c = normalize_regularization_c(regularization_c)
+    lda_shrinkage = normalize_lda_shrinkage(lda_shrinkage)
+    calibration_method = normalize_calibration_method(calibration_method)
     feature_steps = _feature_preprocessor_steps(feature_preprocessor, pca_components)
 
     if normalized == "logistic":
@@ -62,42 +71,49 @@ def make_decoder(
             StandardScaler(),
             *feature_steps,
             LogisticRegression(
+                C=regularization_c,
                 class_weight="balanced",
                 max_iter=max_iter,
                 solver="lbfgs",
             ),
         )
     if normalized == "lda":
+        if lda_shrinkage is None:
+            classifier = LinearDiscriminantAnalysis(solver="svd")
+        else:
+            classifier = LinearDiscriminantAnalysis(solver="lsqr", shrinkage=lda_shrinkage)
         return make_pipeline(
             StandardScaler(),
             *feature_steps,
-            LinearDiscriminantAnalysis(solver="svd"),
+            classifier,
         )
 
     linear_svm = make_pipeline(
         StandardScaler(),
         *feature_steps,
         LinearSVC(
+            C=regularization_c,
             class_weight="balanced",
             max_iter=max_iter,
         ),
     )
     if emission_mode == "uncalibrated":
         return linear_svm
-    return _make_calibrated_classifier(linear_svm)
+    return _make_calibrated_classifier(linear_svm, method=calibration_method)
 
 
-def _make_calibrated_classifier(estimator):
+def _make_calibrated_classifier(estimator, *, method: str = "sigmoid"):
+    method = normalize_calibration_method(method)
     try:
         return CalibratedClassifierCV(
             estimator=estimator,
-            method="sigmoid",
+            method=method,
             cv=3,
         )
     except TypeError:
         return CalibratedClassifierCV(
             base_estimator=estimator,
-            method="sigmoid",
+            method=method,
             cv=3,
         )
 
@@ -132,6 +148,57 @@ def normalize_feature_preprocessor(name: str | None) -> str:
             f"Unknown feature preprocessor '{name}'. Available preprocessors: {', '.join(FEATURE_PREPROCESSOR_CHOICES)}."
         )
     return normalized
+
+
+def normalize_calibration_method(method: str) -> str:
+    """Normalize probability-calibration method names for sklearn."""
+    normalized = method.lower().replace("-", "_")
+    if normalized not in CALIBRATION_METHOD_CHOICES:
+        raise ValueError(f"Unknown calibration method '{method}'. Available methods: {', '.join(CALIBRATION_METHOD_CHOICES)}.")
+    return normalized
+
+
+def normalize_regularization_c(value: int | float | str) -> float:
+    """Normalize inverse regularization strength for linear classifiers."""
+    if isinstance(value, str):
+        try:
+            value = float(value.strip())
+        except ValueError as exc:
+            raise ValueError("regularization_c must be a positive finite number.") from exc
+    if isinstance(value, bool):
+        raise ValueError("regularization_c must be numeric, not boolean.")
+    if isinstance(value, (np.integer,)):
+        value = int(value)
+    if isinstance(value, (np.floating,)):
+        value = float(value)
+    if not isinstance(value, (int, float)) or not np.isfinite(value) or value <= 0.0:
+        raise ValueError("regularization_c must be a positive finite number.")
+    return float(value)
+
+
+def normalize_lda_shrinkage(value: str | float | None) -> str | float | None:
+    """Normalize LDA shrinkage settings.
+
+    ``None``/``none`` keeps sklearn's SVD LDA baseline. ``auto`` and floats in
+    ``[0, 1]`` select the shrinkage-capable LSQR solver.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        stripped = value.strip().lower()
+        if stripped == "" or stripped == "none":
+            return None
+        if stripped == "auto":
+            return "auto"
+        try:
+            value = float(stripped)
+        except ValueError as exc:
+            raise ValueError("lda_shrinkage must be None, 'auto', or a float in [0, 1].") from exc
+    if isinstance(value, (np.floating,)):
+        value = float(value)
+    if isinstance(value, bool) or not isinstance(value, float) or not np.isfinite(value) or value < 0.0 or value > 1.0:
+        raise ValueError("lda_shrinkage must be None, 'auto', or a float in [0, 1].")
+    return float(value)
 
 
 def normalize_pca_components(n_components: int | float | str | None) -> int | float | None:
