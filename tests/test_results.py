@@ -90,6 +90,39 @@ def test_aggregate_time_decode_results_keeps_emission_modes_separate():
     assert aggregated["accuracy_mean"].round(3).tolist() == [0.7, 0.8, 0.8, 0.9]
 
 
+def test_aggregate_time_decode_results_keeps_feature_preprocessors_separate():
+    baseline = _result_frame("s1")
+    baseline["decoder"] = "logistic"
+    baseline["feature_preprocessor"] = "none"
+    baseline["pca_components"] = ""
+    pca = _result_frame("s1", offset=0.1)
+    pca["decoder"] = "logistic"
+    pca["feature_preprocessor"] = "pca"
+    pca["pca_components"] = 0.95
+
+    aggregated = aggregate_time_decode_results(pd.concat([baseline, pca], ignore_index=True))
+
+    assert aggregated["feature_preprocessor"].tolist() == ["none", "none", "pca", "pca"]
+    assert aggregated["pca_components"].tolist() == ["", "", "0.95", "0.95"]
+    assert aggregated["accuracy_mean"].round(3).tolist() == [0.7, 0.8, 0.8, 0.9]
+
+
+def test_aggregate_time_decode_csvs_keeps_blank_pca_component_groups(tmp_path: Path):
+    result_csv = tmp_path / "sub-01_logistic_pca_auto_time_decode.csv"
+    frame = _result_frame("s1")
+    frame["decoder"] = "logistic"
+    frame["feature_preprocessor"] = "pca"
+    frame["pca_components"] = ""
+    frame.to_csv(result_csv, index=False)
+
+    out = tmp_path / "summary.csv"
+    aggregated = aggregate_time_decode_csvs([result_csv], out_path=out)
+
+    assert aggregated["feature_preprocessor"].tolist() == ["pca", "pca"]
+    assert aggregated["pca_components"].tolist() == ["", ""]
+    assert aggregated["accuracy_mean"].round(3).tolist() == [0.7, 0.8]
+
+
 def test_summarize_metric_table_reports_participants_chance_and_scaled_values():
     frame = pd.DataFrame(
         {
