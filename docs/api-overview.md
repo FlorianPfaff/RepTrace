@@ -31,6 +31,7 @@ Key command-line modules include:
 Reusable table-oriented APIs include:
 
 - `reptrace.metrics` for calibration/probabilistic scoring metrics, pre/post window comparisons, and confusion-table summaries.
+- `reptrace.decoding.alignment_window` for applying projections fitted on one M/EEG feature window to matching-channel features from another window.
 - `reptrace.continuous_stimulus_scan` for training an event-locked decoder on one raw run, scanning a held-out raw run, exporting long-stream class probabilities, and scoring detected events.
 - `reptrace.stimulus_detection` for detecting zero, one, or many stimulus events in long probability streams and evaluating them against annotation tables.
 - `reptrace.results` for time-decoding aggregation, participant/window result tables, and peak-window diagnostics.
