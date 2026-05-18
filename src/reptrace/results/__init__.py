@@ -28,7 +28,7 @@ __all__ = [
 ]
 
 METRIC_COLUMNS = ("accuracy", "log_loss", "brier", "ece")
-SUMMARY_GROUP_COLUMNS = ("decoder", "emission_mode")
+SUMMARY_GROUP_COLUMNS = ("decoder", "emission_mode", "temporal_mode")
 WEIGHT_COLUMN = "n_test"
 DEFAULT_ECE_BINS = 10
 

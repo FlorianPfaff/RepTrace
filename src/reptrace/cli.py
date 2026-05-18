@@ -24,6 +24,7 @@ COMMAND_MODULES = {
     "stimulus-detect": "reptrace.stimulus_detection",
     "stimulus-detection": "reptrace.stimulus_detection",
     "temporal-model": "reptrace.temporal_model",
+    "temporal-smoothing": "reptrace.temporal_smoothing",
     "temporal-state-workflow": "reptrace.temporal_state_workflow",
     "validate-manifest": "reptrace.validate_manifest",
     "validate-observations": "reptrace.observation_schema",

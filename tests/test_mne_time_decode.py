@@ -84,3 +84,76 @@ def test_run_time_resolved_decode_writes_probability_observations(tmp_path: Path
     assert observations["subject"].unique().tolist() == ["sub-01"]
     assert sorted(observations["emission_mode"].unique().tolist()) == ["calibrated", "uncalibrated"]
     assert observations[["prob_class_0", "prob_class_1"]].sum(axis=1).round(6).tolist() == [1.0] * 32
+
+
+def test_temporal_train_window_ensemble_writes_all_test_times(tmp_path: Path, monkeypatch):
+    rng = np.random.default_rng(17)
+    labels = np.array(["animate", "inanimate"] * 4)
+    data = rng.normal(size=(8, 1, 5))
+    data[labels == "animate", 0, :2] += 0.75
+    metadata = pd.DataFrame({"condition": labels, "session": ["a", "a", "b", "b", "c", "c", "d", "d"]})
+    epochs = FakeEpochs(data, np.array([0.00, 0.01, 0.02, 0.03, 0.04]), metadata)
+    monkeypatch.setattr("reptrace.mne_time_decode.mne.read_epochs", lambda *args, **kwargs: epochs)
+
+    out = tmp_path / "decode_temporal_ensemble.csv"
+    observations_out = tmp_path / "observations_temporal_ensemble.csv"
+
+    results = run_time_resolved_decode(
+        epochs_path=tmp_path / "sub-01_epo.fif",
+        label_column="condition",
+        out_path=out,
+        n_splits=2,
+        window_ms=20,
+        step_ms=20,
+        max_iter=2000,
+        observation_out_path=observations_out,
+        subject="sub-01",
+        temporal_train_window=(0.0, 0.015),
+    )
+
+    observations = pd.read_csv(observations_out)
+
+    assert results["temporal_mode"].unique().tolist() == ["train_window_ensemble"]
+    assert results["n_train_windows"].unique().tolist() == [1]
+    assert results["train_time"].unique().round(6).tolist() == [0.005]
+    assert sorted(results["time"].round(6).unique().tolist()) == [0.005, 0.025]
+    assert len(results) == 4
+
+    assert observations["temporal_mode"].unique().tolist() == ["train_window_ensemble"]
+    assert observations["n_train_windows"].unique().tolist() == [1]
+    assert observations["train_time"].unique().round(6).tolist() == [0.005]
+    assert sorted(observations["test_time"].round(6).unique().tolist()) == [0.005, 0.025]
+    assert observations[["prob_class_0", "prob_class_1"]].sum(axis=1).round(6).tolist() == [1.0] * len(observations)
+
+
+def test_run_time_resolved_decode_can_tune_decoder_hyperparameters(tmp_path: Path, monkeypatch):
+    rng = np.random.default_rng(13)
+    labels = np.array(["animate", "inanimate"] * 6)
+    data = rng.normal(size=(12, 1, 5))
+    data[labels == "animate", 0, :] += 0.5
+    metadata = pd.DataFrame({"condition": labels, "session": ["a", "a", "b", "b", "c", "c", "d", "d", "e", "e", "f", "f"]})
+    epochs = FakeEpochs(data, np.array([0.00, 0.01, 0.02, 0.03, 0.04]), metadata)
+    monkeypatch.setattr("reptrace.mne_time_decode.mne.read_epochs", lambda *args, **kwargs: epochs)
+
+    out = tmp_path / "decode.csv"
+    observations_out = tmp_path / "observations.csv"
+
+    results = run_time_resolved_decode(
+        epochs_path=tmp_path / "sub-01_epo.fif",
+        label_column="condition",
+        out_path=out,
+        n_splits=2,
+        window_ms=20,
+        step_ms=20,
+        max_iter=2000,
+        observation_out_path=observations_out,
+        tune_hyperparameters=True,
+        tuning_cv_splits=2,
+        tuning_c_grid=(0.1, 1.0),
+    )
+    observations = pd.read_csv(observations_out)
+
+    assert "best_params" in results.columns
+    assert results["tuned_hyperparameters"].tolist() == [True] * len(results)
+    assert observations["best_params"].str.contains("logisticregression__C", regex=False).all()
+    assert observations["model_hash"].nunique() >= 1
