@@ -220,7 +220,9 @@ def test_seeded_torch_data_loaders_are_reproducible():
     first_loaders = _build_pytorch_data_loaders(features, labels, random_seed=123)
     second_loaders = _build_pytorch_data_loaders(features, labels, random_seed=123)
 
-    labels_by_loader = lambda loaders: [[batch_labels.tolist() for _, batch_labels in loader] for loader in loaders]
+    def labels_by_loader(loaders):
+        return [[batch_labels.tolist() for _, batch_labels in loader] for loader in loaders]
+
     assert labels_by_loader(first_loaders) == labels_by_loader(second_loaders)
 
 
