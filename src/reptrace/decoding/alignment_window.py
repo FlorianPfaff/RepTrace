@@ -10,13 +10,23 @@ across the decoding window samples.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 
 import numpy as np
 
+FeatureOrder = Literal["channel_time", "time_channel"]
+DEFAULT_FEATURE_ORDER: FeatureOrder = "channel_time"
+
 
 class WindowedFeatureSet(Protocol):
-    """Minimal feature-set interface needed for alignment-window adaptation."""
+    """Minimal feature-set interface needed for alignment-window adaptation.
+
+    Flattened MNE epoch arrays use the default ``channel_time`` layout because
+    ``data[:, :, start:stop].reshape(n_trials, -1)`` stores all time samples of
+    channel 0 first, then all time samples of channel 1, and so on. Legacy or
+    synthetic feature sets that are flattened as ``[t0c0, t0c1, t1c0, ...]`` can
+    set ``feature_order = "time_channel"``.
+    """
 
     features: np.ndarray
     labels: np.ndarray
@@ -125,33 +135,54 @@ def _feature_matrix(value: np.ndarray, *, name: str) -> np.ndarray:
     return matrix
 
 
+def _feature_order(feature_set: WindowedFeatureSet) -> FeatureOrder:
+    order = getattr(feature_set, "feature_order", DEFAULT_FEATURE_ORDER)
+    if order not in {"channel_time", "time_channel"}:
+        raise ValueError(f"feature_order must be 'channel_time' or 'time_channel', got {order!r}.")
+    return order
+
+
 def _projection_to_channel_space(projection: np.ndarray, feature_set: WindowedFeatureSet) -> np.ndarray:
     n_channels = int(feature_set.n_channels)
     if projection.shape[0] == n_channels:
         return projection
-    expected = int(feature_set.n_window_samples) * n_channels
+    n_window_samples = int(feature_set.n_window_samples)
+    expected = n_window_samples * n_channels
     if projection.shape[0] != expected:
         raise ValueError(f"Projection rows are incompatible with the alignment feature shape: {projection.shape[0]} != {expected}.")
-    return projection.reshape(int(feature_set.n_window_samples), n_channels, projection.shape[1]).mean(axis=0)
+    if _feature_order(feature_set) == "channel_time":
+        return projection.reshape(n_channels, n_window_samples, projection.shape[1]).mean(axis=1)
+    return projection.reshape(n_window_samples, n_channels, projection.shape[1]).mean(axis=0)
 
 
 def _feature_mean_to_channel_space(mean: np.ndarray, feature_set: WindowedFeatureSet) -> np.ndarray:
     n_channels = int(feature_set.n_channels)
     if mean.shape[0] == n_channels:
         return mean
-    expected = int(feature_set.n_window_samples) * n_channels
+    n_window_samples = int(feature_set.n_window_samples)
+    expected = n_window_samples * n_channels
     if mean.shape[0] != expected:
         raise ValueError(f"Feature mean is incompatible with the feature shape: {mean.shape[0]} != {expected}.")
-    return mean.reshape(int(feature_set.n_window_samples), n_channels).mean(axis=0)
+    if _feature_order(feature_set) == "channel_time":
+        return mean.reshape(n_channels, n_window_samples).mean(axis=1)
+    return mean.reshape(n_window_samples, n_channels).mean(axis=0)
+
+
+def _features_to_time_channel(matrix: np.ndarray, feature_set: WindowedFeatureSet) -> np.ndarray:
+    n_channels = int(feature_set.n_channels)
+    n_window_samples = int(feature_set.n_window_samples)
+    expected = n_window_samples * n_channels
+    if matrix.shape[1] != expected:
+        raise ValueError(f"Feature columns are incompatible with the decoding feature shape: {matrix.shape[1]} != {expected}.")
+    if _feature_order(feature_set) == "channel_time":
+        return matrix.reshape(matrix.shape[0], n_channels, n_window_samples).transpose(0, 2, 1)
+    return matrix.reshape(matrix.shape[0], n_window_samples, n_channels)
 
 
 def _apply_channel_projection(matrix: np.ndarray, feature_set: WindowedFeatureSet, channel_projection: np.ndarray, channel_mean: np.ndarray) -> np.ndarray:
     n_channels = int(feature_set.n_channels)
     if matrix.shape[1] == n_channels:
         return (matrix - channel_mean) @ channel_projection
-    expected = int(feature_set.n_window_samples) * n_channels
-    if matrix.shape[1] != expected:
-        raise ValueError(f"Feature columns are incompatible with the decoding feature shape: {matrix.shape[1]} != {expected}.")
-    trial_channel = matrix.reshape(matrix.shape[0], int(feature_set.n_window_samples), n_channels)
+    trial_channel = _features_to_time_channel(matrix, feature_set)
     transformed = (trial_channel - channel_mean[None, None, :]) @ channel_projection
     return transformed.reshape(matrix.shape[0], -1)
