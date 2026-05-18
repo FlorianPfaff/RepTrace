@@ -11,9 +11,18 @@ from reptrace.metadata import prepare_binary_metadata
 from reptrace.mne_time_decode import run_time_resolved_decode
 from reptrace.plot_time_decode import plot_time_decode_results
 from reptrace.results import aggregate_time_decode_csvs
-from reptrace.decoding import DECODER_CHOICES, EMISSION_MODE_CHOICES, normalize_decoder_name, normalize_emission_mode
+from reptrace.decoding import (
+    DECODER_CHOICES,
+    EMISSION_MODE_CHOICES,
+    FEATURE_PREPROCESSOR_CHOICES,
+    normalize_decoder_name,
+    normalize_emission_mode,
+    normalize_feature_preprocessor,
+    normalize_pca_components,
+)
 
 EMISSION_RUN_CHOICES = (*EMISSION_MODE_CHOICES, "both")
+FEATURE_PREPROCESSOR_RUN_CHOICES = (*FEATURE_PREPROCESSOR_CHOICES, "pca-whiten")
 
 
 @dataclass(frozen=True)
@@ -55,6 +64,12 @@ def _bool_value(row: pd.Series, column: str, default: bool = False) -> bool:
     return value.lower() in {"1", "true", "yes", "y"}
 
 
+def _pca_components_value(row: pd.Series, default: int | float | str | None = None) -> int | float | str | None:
+    if "pca_components" not in row or _missing(row["pca_components"]):
+        return default
+    return str(row["pca_components"])
+
+
 def _resolve_path(value: str | None, base_dir: Path) -> Path | None:
     if value is None:
         return None
@@ -82,6 +97,17 @@ def _safe_name(value: str) -> str:
     return value.lower().replace("-", "_").replace(" ", "_")
 
 
+def _safe_value_name(value: object) -> str:
+    return _safe_name(str(value)).replace(".", "p")
+
+
+def _preprocessor_output_part(feature_preprocessor: str, pca_components: int | float | None) -> str:
+    if feature_preprocessor == "none":
+        return "none"
+    component_part = "auto" if pca_components is None else _safe_value_name(pca_components)
+    return f"{_safe_name(feature_preprocessor)}_{component_part}"
+
+
 def _decoder_output_stem(subject: str, decoder: str, has_decoder_column: bool) -> str:
     return f"{subject}_{_safe_name(decoder)}" if has_decoder_column else subject
 
@@ -93,12 +119,18 @@ def _output_stem(
     *,
     has_decoder_column: bool,
     has_emission_mode_column: bool,
+    feature_preprocessor: str = "none",
+    pca_components: int | float | None = None,
+    has_feature_preprocessor_column: bool = False,
+    has_pca_components_column: bool = False,
 ) -> str:
     parts = [subject]
     if has_decoder_column:
         parts.append(_safe_name(decoder))
     if has_emission_mode_column:
         parts.append(_safe_name(emission_mode))
+    if has_feature_preprocessor_column or has_pca_components_column or feature_preprocessor != "none":
+        parts.append(_preprocessor_output_part(feature_preprocessor, pca_components))
     return "_".join(parts)
 
 
@@ -151,6 +183,8 @@ def run_benchmark_manifest(
     default_max_iter: int = 1000,
     default_decoder: str = "logistic",
     default_emission_mode: str = "calibrated",
+    default_feature_preprocessor: str = "none",
+    default_pca_components: int | float | str | None = None,
     calibration_dir: Path | None = None,
     calibration_bins: int = 10,
     observation_dir: Path | None = None,
@@ -180,12 +214,23 @@ def run_benchmark_manifest(
         emission_mode = _string_value(row, "emission_mode", default_emission_mode) or default_emission_mode
         if emission_mode != "both":
             emission_mode = normalize_emission_mode(emission_mode)
+        feature_preprocessor = normalize_feature_preprocessor(
+            _string_value(row, "feature_preprocessor", default_feature_preprocessor) or default_feature_preprocessor
+        )
+        pca_components_raw = _pca_components_value(row, default_pca_components)
+        if feature_preprocessor == "none" and pca_components_raw is not None:
+            raise ValueError("pca_components can only be set when feature_preprocessor is 'pca' or 'pca_whiten'.")
+        pca_components = normalize_pca_components(pca_components_raw) if feature_preprocessor != "none" else None
         output_stem = _output_stem(
             subject,
             decoder,
             emission_mode,
             has_decoder_column="decoder" in manifest.columns,
             has_emission_mode_column="emission_mode" in manifest.columns,
+            feature_preprocessor=feature_preprocessor,
+            pca_components=pca_components,
+            has_feature_preprocessor_column="feature_preprocessor" in manifest.columns,
+            has_pca_components_column="pca_components" in manifest.columns,
         )
 
         output_csv = _resolve_path(_string_value(row, "out_csv"), manifest_dir)
@@ -228,6 +273,8 @@ def run_benchmark_manifest(
             max_iter=_int_value(row, "max_iter", default_max_iter),
             decoder=decoder,
             emission_mode=emission_mode,
+            feature_preprocessor=feature_preprocessor,
+            pca_components=pca_components,
             calibration_out_path=calibration_out_csv,
             calibration_bins=_int_value(row, "calibration_bins", calibration_bins),
             observation_out_path=observation_out_csv,
@@ -294,6 +341,11 @@ def main() -> None:
     parser.add_argument("--max-iter", type=int, default=1000)
     parser.add_argument("--decoder", choices=DECODER_CHOICES, default="logistic")
     parser.add_argument("--emission-mode", choices=EMISSION_RUN_CHOICES, default="calibrated")
+    parser.add_argument("--feature-preprocessor", choices=FEATURE_PREPROCESSOR_RUN_CHOICES, default="none")
+    parser.add_argument(
+        "--pca-components",
+        help="PCA component count or explained-variance fraction. Only valid with --feature-preprocessor pca or pca-whiten.",
+    )
     parser.add_argument("--calibration-dir", type=Path)
     parser.add_argument("--calibration-bins", type=int, default=10)
     parser.add_argument("--observation-dir", type=Path, help="Optional directory for held-out trial/time probability observation CSVs.")
@@ -321,6 +373,8 @@ def main() -> None:
         default_max_iter=args.max_iter,
         default_decoder=args.decoder,
         default_emission_mode=args.emission_mode,
+        default_feature_preprocessor=args.feature_preprocessor,
+        default_pca_components=args.pca_components,
         calibration_dir=args.calibration_dir,
         calibration_bins=args.calibration_bins,
         observation_dir=args.observation_dir,
