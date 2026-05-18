@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pandas.testing as pdt
+import pytest
 
 from reptrace.stimulus_detection import detect_stimulus_events, fit_stimulus_detection_thresholds
 from reptrace.streaming_stimulus_detection import StimulusDetectionConfig, StreamingStimulusDetector
@@ -88,6 +89,22 @@ def _run_streaming_detector(
         events.extend(detector.update(observation))
     events.extend(detector.flush())
     return pd.DataFrame(events).sort_values(["onset_time", "stimulus_class"]).reset_index(drop=True)
+
+
+def test_streaming_detector_rejects_missing_threshold_group_column():
+    frame = _stream_frame(final_gap=True)
+    detector = StreamingStimulusDetector(
+        StimulusDetectionConfig(
+            stream_columns=("stream_id",),
+            detection_window=(0.0, float("inf")),
+        ),
+        _thresholds(frame, target_classes=["A"]),
+    )
+    observation = _observation("run-1", 0.10, (0.86, 0.08, 0.06))
+    observation.pop("emission_mode")
+
+    with pytest.raises(ValueError, match="missing threshold group columns"):
+        detector.update(observation)
 
 
 def test_streaming_detector_matches_offline_events_with_causal_confirmation():
