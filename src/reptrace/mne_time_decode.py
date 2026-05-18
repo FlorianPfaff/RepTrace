@@ -22,6 +22,7 @@ from reptrace.decoding import (
     predict_emission_probabilities,
     time_windows,
 )
+from reptrace.decoding.temporal_generalization import summarize_train_time_stability
 from reptrace.metrics import brier_score_multiclass, expected_calibration_error, reliability_bins
 from reptrace.observations import ProbabilityObservationTable, stable_hash
 
@@ -73,6 +74,8 @@ def run_time_resolved_decode(
     calibration_out_path: Path | None = None,
     calibration_bins: int = 10,
     observation_out_path: Path | None = None,
+    temporal_generalization_out_path: Path | None = None,
+    temporal_stability_out_path: Path | None = None,
     subject: str | None = None,
 ) -> pd.DataFrame:
     """Run time-resolved decoding on an MNE epochs file and save metrics as CSV."""
@@ -130,12 +133,27 @@ def run_time_resolved_decode(
 
     data = epochs.get_data(copy=False)
     classes = np.arange(len(encoder.classes_))
+    windows = [
+        {
+            "start": start,
+            "stop": stop,
+            "center": center,
+            "features": data[:, :, start:stop].reshape(len(labels), -1),
+            "window_start": float(epochs.times[start]),
+            "window_stop": float(epochs.times[stop - 1]),
+        }
+        for start, stop, center in time_windows(epochs.times, window_ms=window_ms, step_ms=step_ms)
+    ]
+
     rows = []
     calibration_rows = []
     observation_rows = []
+    temporal_generalization_rows = []
+    compute_temporal_generalization = (
+        temporal_generalization_out_path is not None or temporal_stability_out_path is not None
+    )
 
-    for start, stop, center in time_windows(epochs.times, window_ms=window_ms, step_ms=step_ms):
-        features = data[:, :, start:stop].reshape(len(labels), -1)
+    for train_window in windows:
         for fold, (train_idx, test_idx) in enumerate(make_cross_validator(labels, groups, n_splits)):
             for current_emission_mode in emission_modes:
                 model = make_decoder(
@@ -145,42 +163,27 @@ def run_time_resolved_decode(
                     feature_preprocessor=feature_preprocessor_name,
                     pca_components=pca_components_value,
                 )
-                model.fit(features[train_idx], labels[train_idx])
+                model.fit(train_window["features"][train_idx], labels[train_idx])
 
-                probabilities = predict_emission_probabilities(
-                    model,
-                    features[test_idx],
-                    emission_mode=current_emission_mode,
-                )
-                predictions = probabilities.argmax(axis=1)
-                test_labels = labels[test_idx]
-
-                rows.append(
-                    _add_subject(
-                        {
-                            "fold": fold,
-                            "decoder": decoder_name,
-                            "emission_mode": current_emission_mode,
-                            "feature_preprocessor": feature_preprocessor_name,
-                            "pca_components": "" if pca_components_value is None else pca_components_value,
-                            "time": center,
-                            "window_start": float(epochs.times[start]),
-                            "window_stop": float(epochs.times[stop - 1]),
-                            "accuracy": accuracy_score(test_labels, predictions),
-                            "log_loss": log_loss(test_labels, probabilities, labels=classes),
-                            "brier": brier_score_multiclass(probabilities, test_labels),
-                            "ece": expected_calibration_error(probabilities, test_labels),
-                            "n_train": len(train_idx),
-                            "n_test": len(test_idx),
-                            "n_classes": len(classes),
-                            "class_names": "|".join(map(str, encoder.classes_)),
-                        },
-                        subject,
+                test_windows = windows if compute_temporal_generalization else [train_window]
+                for test_window in test_windows:
+                    probabilities = predict_emission_probabilities(
+                        model,
+                        test_window["features"][test_idx],
+                        emission_mode=current_emission_mode,
                     )
-                )
-                if calibration_out_path is not None:
-                    for bin_row in reliability_bins(probabilities, test_labels, n_bins=calibration_bins):
-                        calibration_rows.append(
+                    predictions = probabilities.argmax(axis=1)
+                    test_labels = labels[test_idx]
+                    metrics = {
+                        "accuracy": accuracy_score(test_labels, predictions),
+                        "log_loss": log_loss(test_labels, probabilities, labels=classes),
+                        "brier": brier_score_multiclass(probabilities, test_labels),
+                        "ece": expected_calibration_error(probabilities, test_labels),
+                    }
+                    is_diagonal = np.isclose(train_window["center"], test_window["center"])
+
+                    if compute_temporal_generalization:
+                        temporal_generalization_rows.append(
                             _add_subject(
                                 {
                                     "fold": fold,
@@ -188,61 +191,125 @@ def run_time_resolved_decode(
                                     "emission_mode": current_emission_mode,
                                     "feature_preprocessor": feature_preprocessor_name,
                                     "pca_components": "" if pca_components_value is None else pca_components_value,
-                                    "time": center,
-                                    "window_start": float(epochs.times[start]),
-                                    "window_stop": float(epochs.times[stop - 1]),
-                                    **bin_row,
+                                    "train_time": train_window["center"],
+                                    "test_time": test_window["center"],
+                                    "train_window_center_s": train_window["center"],
+                                    "test_window_center_s": test_window["center"],
+                                    "train_window_start_s": train_window["window_start"],
+                                    "train_window_stop_s": train_window["window_stop"],
+                                    "test_window_start_s": test_window["window_start"],
+                                    "test_window_stop_s": test_window["window_stop"],
+                                    "is_diagonal": bool(is_diagonal),
+                                    "accuracy": metrics["accuracy"],
+                                    "percent": 100.0 * metrics["accuracy"],
+                                    "log_loss": metrics["log_loss"],
+                                    "brier": metrics["brier"],
+                                    "ece": metrics["ece"],
+                                    "chance_accuracy": 1.0 / len(classes),
+                                    "chance_percent": 100.0 / len(classes),
+                                    "above_chance": bool(metrics["accuracy"] > 1.0 / len(classes)),
+                                    "n_train": len(train_idx),
+                                    "n_test": len(test_idx),
+                                    "n_train_trials": len(train_idx),
+                                    "n_validation_trials": len(test_idx),
+                                    "n_classes": len(classes),
+                                    "class_names": "|".join(map(str, encoder.classes_)),
                                 },
                                 subject,
                             )
                         )
-                if observation_out_path is not None:
-                    for local_position, filtered_index in enumerate(test_idx):
-                        true_label = int(test_labels[local_position])
-                        predicted_label = int(predictions[local_position])
-                        observation = {
-                            "fold": fold,
-                            "split_id": split_id,
-                            "seed": 13,
-                            "decoder": decoder_name,
-                            "backend": "sklearn",
-                            "emission_mode": current_emission_mode,
-                            "feature_preprocessor": feature_preprocessor_name,
-                            "pca_components": "" if pca_components_value is None else pca_components_value,
-                            "train_time": center,
-                            "test_time": center,
-                            "time": center,
-                            "window_start": float(epochs.times[start]),
-                            "window_stop": float(epochs.times[stop - 1]),
-                            "sample_index": int(original_indices[filtered_index]),
-                            "sequence_id": int(original_indices[filtered_index]),
-                            "session": "" if session_values is None else session_values[filtered_index],
-                            "true_label": true_label,
-                            "true_class": str(encoder.classes_[true_label]),
-                            "predicted_label": predicted_label,
-                            "predicted_class": str(encoder.classes_[predicted_label]),
-                            "probability_true_class": float(probabilities[local_position, true_label]),
-                            "confidence": float(probabilities[local_position].max()),
-                            "is_correct": bool(predicted_label == true_label),
-                            "calibration_fold": "",
-                            "preprocessing_hash": preprocessing_hash,
-                            "model_hash": stable_hash(
-                                {
-                                    "backend": "sklearn",
-                                    "decoder": decoder_name,
-                                    "emission_mode": current_emission_mode,
-                                    "max_iter": max_iter,
-                                    "feature_preprocessor": feature_preprocessor_name,
-                                    "pca_components": pca_components_value,
-                                }
-                            ),
-                        }
-                        if group_column is not None:
-                            observation["group"] = groups[filtered_index]
-                        for class_index, class_name in enumerate(encoder.classes_):
-                            observation[f"class_{class_index}"] = str(class_name)
-                            observation[f"prob_class_{class_index}"] = float(probabilities[local_position, class_index])
-                        observation_rows.append(_add_subject(observation, subject))
+
+                    if not is_diagonal:
+                        continue
+
+                    rows.append(
+                        _add_subject(
+                            {
+                                "fold": fold,
+                                "decoder": decoder_name,
+                                "emission_mode": current_emission_mode,
+                                "feature_preprocessor": feature_preprocessor_name,
+                                "pca_components": "" if pca_components_value is None else pca_components_value,
+                                "time": train_window["center"],
+                                "window_start": train_window["window_start"],
+                                "window_stop": train_window["window_stop"],
+                                "accuracy": metrics["accuracy"],
+                                "log_loss": metrics["log_loss"],
+                                "brier": metrics["brier"],
+                                "ece": metrics["ece"],
+                                "n_train": len(train_idx),
+                                "n_test": len(test_idx),
+                                "n_classes": len(classes),
+                                "class_names": "|".join(map(str, encoder.classes_)),
+                            },
+                            subject,
+                        )
+                    )
+                    if calibration_out_path is not None:
+                        for bin_row in reliability_bins(probabilities, test_labels, n_bins=calibration_bins):
+                            calibration_rows.append(
+                                _add_subject(
+                                    {
+                                        "fold": fold,
+                                        "decoder": decoder_name,
+                                        "emission_mode": current_emission_mode,
+                                        "feature_preprocessor": feature_preprocessor_name,
+                                        "pca_components": "" if pca_components_value is None else pca_components_value,
+                                        "time": train_window["center"],
+                                        "window_start": train_window["window_start"],
+                                        "window_stop": train_window["window_stop"],
+                                        **bin_row,
+                                    },
+                                    subject,
+                                )
+                            )
+                    if observation_out_path is not None:
+                        for local_position, filtered_index in enumerate(test_idx):
+                            true_label = int(test_labels[local_position])
+                            predicted_label = int(predictions[local_position])
+                            observation = {
+                                "fold": fold,
+                                "split_id": split_id,
+                                "seed": 13,
+                                "decoder": decoder_name,
+                                "backend": "sklearn",
+                                "emission_mode": current_emission_mode,
+                                "feature_preprocessor": feature_preprocessor_name,
+                                "pca_components": "" if pca_components_value is None else pca_components_value,
+                                "train_time": train_window["center"],
+                                "test_time": train_window["center"],
+                                "time": train_window["center"],
+                                "window_start": train_window["window_start"],
+                                "window_stop": train_window["window_stop"],
+                                "sample_index": int(original_indices[filtered_index]),
+                                "sequence_id": int(original_indices[filtered_index]),
+                                "session": "" if session_values is None else session_values[filtered_index],
+                                "true_label": true_label,
+                                "true_class": str(encoder.classes_[true_label]),
+                                "predicted_label": predicted_label,
+                                "predicted_class": str(encoder.classes_[predicted_label]),
+                                "probability_true_class": float(probabilities[local_position, true_label]),
+                                "confidence": float(probabilities[local_position].max()),
+                                "is_correct": bool(predicted_label == true_label),
+                                "calibration_fold": "",
+                                "preprocessing_hash": preprocessing_hash,
+                                "model_hash": stable_hash(
+                                    {
+                                        "backend": "sklearn",
+                                        "decoder": decoder_name,
+                                        "emission_mode": current_emission_mode,
+                                        "max_iter": max_iter,
+                                        "feature_preprocessor": feature_preprocessor_name,
+                                        "pca_components": pca_components_value,
+                                    }
+                                ),
+                            }
+                            if group_column is not None:
+                                observation["group"] = groups[filtered_index]
+                            for class_index, class_name in enumerate(encoder.classes_):
+                                observation[f"class_{class_index}"] = str(class_name)
+                                observation[f"prob_class_{class_index}"] = float(probabilities[local_position, class_index])
+                            observation_rows.append(_add_subject(observation, subject))
 
     results = pd.DataFrame(rows)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -261,6 +328,29 @@ def run_time_resolved_decode(
                 "model_hash": model_hash,
             }
         ).to_csv(observation_out_path)
+    if compute_temporal_generalization:
+        temporal_generalization = pd.DataFrame(temporal_generalization_rows)
+        if temporal_generalization_out_path is not None:
+            temporal_generalization_out_path.parent.mkdir(parents=True, exist_ok=True)
+            temporal_generalization.to_csv(temporal_generalization_out_path, index=False)
+        if temporal_stability_out_path is not None:
+            group_columns = [
+                column
+                for column in (
+                    "subject",
+                    "decoder",
+                    "emission_mode",
+                    "feature_preprocessor",
+                    "pca_components",
+                )
+                if column in temporal_generalization.columns
+            ]
+            temporal_stability = summarize_train_time_stability(
+                temporal_generalization,
+                group_columns=group_columns,
+            )
+            temporal_stability_out_path.parent.mkdir(parents=True, exist_ok=True)
+            temporal_stability.to_csv(temporal_stability_out_path, index=False)
     return results
 
 
@@ -290,6 +380,16 @@ def main() -> None:
     parser.add_argument("--calibration-out", type=Path)
     parser.add_argument("--calibration-bins", type=int, default=10)
     parser.add_argument("--observations-out", type=Path, help="Optional held-out trial/time probability observation CSV.")
+    parser.add_argument(
+        "--temporal-generalization-out",
+        type=Path,
+        help="Optional train-time by test-time held-out score matrix CSV.",
+    )
+    parser.add_argument(
+        "--temporal-stability-out",
+        type=Path,
+        help="Optional train-time stability ranking CSV derived from the temporal-generalization matrix.",
+    )
     parser.add_argument("--subject", help="Optional subject identifier to include in output CSVs.")
     args = parser.parse_args()
 
@@ -313,11 +413,17 @@ def main() -> None:
         calibration_out_path=args.calibration_out,
         calibration_bins=args.calibration_bins,
         observation_out_path=args.observations_out,
+        temporal_generalization_out_path=args.temporal_generalization_out,
+        temporal_stability_out_path=args.temporal_stability_out,
         subject=args.subject,
     )
     print(f"Wrote {args.out}")
     if args.observations_out is not None:
         print(f"Wrote probability observations: {args.observations_out}")
+    if args.temporal_generalization_out is not None:
+        print(f"Wrote temporal generalization matrix: {args.temporal_generalization_out}")
+    if args.temporal_stability_out is not None:
+        print(f"Wrote temporal stability ranking: {args.temporal_stability_out}")
     for emission_mode_name, summary in results.groupby("emission_mode", sort=True):
         time_summary = summary.groupby("time")[["accuracy", "log_loss", "brier", "ece"]].mean()
         best_time = time_summary["accuracy"].idxmax()
