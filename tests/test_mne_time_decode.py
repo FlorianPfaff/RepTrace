@@ -84,3 +84,48 @@ def test_run_time_resolved_decode_writes_probability_observations(tmp_path: Path
     assert observations["subject"].unique().tolist() == ["sub-01"]
     assert sorted(observations["emission_mode"].unique().tolist()) == ["calibrated", "uncalibrated"]
     assert observations[["prob_class_0", "prob_class_1"]].sum(axis=1).round(6).tolist() == [1.0] * 32
+
+
+def test_run_time_resolved_decode_uses_group_aware_inner_model_selection(tmp_path: Path, monkeypatch):
+    rng = np.random.default_rng(42)
+    labels = np.array(["animate", "inanimate"] * 8)
+    data = rng.normal(scale=0.2, size=(16, 2, 4))
+    data[labels == "animate", :, :] += 1.0
+    data[labels == "inanimate", :, :] -= 1.0
+    metadata = pd.DataFrame(
+        {
+            "condition": labels,
+            "session": np.repeat([f"s{i}" for i in range(8)], 2),
+        }
+    )
+    epochs = FakeEpochs(data, np.array([0.00, 0.01, 0.02, 0.03]), metadata)
+    monkeypatch.setattr("reptrace.mne_time_decode.mne.read_epochs", lambda *args, **kwargs: epochs)
+
+    out = tmp_path / "decode_selected.csv"
+    observations_out = tmp_path / "observations_selected.csv"
+
+    results = run_time_resolved_decode(
+        epochs_path=tmp_path / "sub-01_epo.fif",
+        label_column="condition",
+        group_column="session",
+        out_path=out,
+        n_splits=2,
+        window_ms=20,
+        step_ms=20,
+        max_iter=2000,
+        model_selection="regularized",
+        inner_splits=2,
+        selection_metric="log_loss",
+        observation_out_path=observations_out,
+    )
+
+    observations = pd.read_csv(observations_out)
+
+    assert set(results["model_selection"]) == {"regularized"}
+    assert set(results["selection_metric"]) == {"log_loss"}
+    assert set(results["inner_splits"]) == {2}
+    assert np.isfinite(results["selection_score"]).all()
+    assert set(results["regularization_c"]).issubset({0.01, 0.1, 1.0, 10.0})
+    assert set(observations["group"]) == set(metadata["session"])
+    assert set(observations["model_selection"]) == {"regularized"}
+    assert observations["model_hash"].astype(str).str.len().gt(0).all()
