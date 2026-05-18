@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import inspect
+from collections.abc import Sequence
+
 import numpy as np
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
+from sklearn.model_selection import GridSearchCV, StratifiedGroupKFold, StratifiedKFold
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
@@ -22,6 +25,8 @@ from reptrace.decoding.sampling import (
 DECODER_CHOICES = ("logistic", "lda", "linear_svm")
 EMISSION_MODE_CHOICES = ("calibrated", "uncalibrated")
 FEATURE_PREPROCESSOR_CHOICES = ("none", "pca", "pca_whiten")
+TUNING_SCORING_CHOICES = ("accuracy", "balanced_accuracy", "neg_log_loss")
+DEFAULT_TUNING_C_GRID = (0.01, 0.1, 1.0, 10.0, 100.0)
 
 
 def make_logistic_decoder(
@@ -46,16 +51,34 @@ def make_decoder(
     emission_mode: str = "calibrated",
     feature_preprocessor: str = "none",
     pca_components: int | float | str | None = None,
+    tune_hyperparameters: bool = False,
+    tuning_cv: int | Sequence[tuple[np.ndarray, np.ndarray]] = 3,
+    tuning_scoring: str = "accuracy",
+    tuning_c_grid: Sequence[float] | str | None = None,
 ):
     """Create a standard probability-producing decoder by name.
 
     Optional feature preprocessing is inserted after fold-local standardization
     and before the classifier. This keeps low-rank transforms such as PCA inside
-    each cross-validation fold and prevents train/test leakage.
+    each cross-validation fold and prevents train/test leakage. When
+    ``tune_hyperparameters`` is enabled, the returned estimator is a
+    ``GridSearchCV`` wrapper around the same decoder family.
     """
     normalized = normalize_decoder_name(name)
     emission_mode = normalize_emission_mode(emission_mode)
     feature_steps = _feature_preprocessor_steps(feature_preprocessor, pca_components)
+
+    if tune_hyperparameters:
+        return make_tuned_decoder(
+            normalized,
+            max_iter=max_iter,
+            emission_mode=emission_mode,
+            feature_preprocessor=feature_preprocessor,
+            pca_components=pca_components,
+            cv=tuning_cv,
+            scoring=tuning_scoring,
+            c_grid=tuning_c_grid,
+        )
 
     if normalized == "logistic":
         return make_pipeline(
@@ -87,19 +110,122 @@ def make_decoder(
     return _make_calibrated_classifier(linear_svm)
 
 
+def make_tuned_decoder(
+    name: str = "logistic",
+    *,
+    max_iter: int = 1000,
+    emission_mode: str = "calibrated",
+    feature_preprocessor: str = "none",
+    pca_components: int | float | str | None = None,
+    cv: int | Sequence[tuple[np.ndarray, np.ndarray]] = 3,
+    scoring: str = "accuracy",
+    c_grid: Sequence[float] | str | None = None,
+):
+    """Create a decoder with inner-CV hyperparameter selection.
+
+    Logistic regression and linear SVM tune the regularization strength ``C``.
+    LDA compares the default SVD solver with shrinkage LDA
+    (``solver='lsqr', shrinkage='auto'``), which is often better conditioned for
+    high-dimensional M/EEG windows.
+    """
+    normalized = normalize_decoder_name(name)
+    emission_mode = normalize_emission_mode(emission_mode)
+    feature_steps = _feature_preprocessor_steps(feature_preprocessor, pca_components)
+    scoring = normalize_tuning_scoring(scoring)
+    c_grid = parse_c_grid(c_grid)
+
+    if normalized == "logistic":
+        estimator = make_pipeline(
+            StandardScaler(),
+            *feature_steps,
+            LogisticRegression(
+                class_weight="balanced",
+                max_iter=max_iter,
+                solver="lbfgs",
+            ),
+        )
+        param_grid = {"logisticregression__C": c_grid}
+    elif normalized == "lda":
+        estimator = make_pipeline(
+            StandardScaler(),
+            *feature_steps,
+            LinearDiscriminantAnalysis(),
+        )
+        param_grid = [
+            {
+                "lineardiscriminantanalysis__solver": ["svd"],
+                "lineardiscriminantanalysis__shrinkage": [None],
+            },
+            {
+                "lineardiscriminantanalysis__solver": ["lsqr"],
+                "lineardiscriminantanalysis__shrinkage": ["auto"],
+            },
+        ]
+    else:
+        if emission_mode == "uncalibrated" and scoring == "neg_log_loss":
+            raise ValueError("neg_log_loss tuning requires probability estimates; use calibrated emissions for linear_svm.")
+        linear_svm = make_pipeline(
+            StandardScaler(),
+            *feature_steps,
+            LinearSVC(
+                class_weight="balanced",
+                max_iter=max_iter,
+            ),
+        )
+        if emission_mode == "uncalibrated":
+            estimator = linear_svm
+            param_grid = {"linearsvc__C": c_grid}
+        else:
+            estimator = _make_calibrated_classifier(linear_svm)
+            param_grid = {_calibrated_estimator_param(estimator, "linearsvc__C"): c_grid}
+
+    return GridSearchCV(
+        estimator=estimator,
+        param_grid=param_grid,
+        scoring=scoring,
+        cv=cv,
+        refit=True,
+    )
+
+
 def _make_calibrated_classifier(estimator):
-    try:
-        return CalibratedClassifierCV(
-            estimator=estimator,
-            method="sigmoid",
-            cv=3,
-        )
-    except TypeError:
-        return CalibratedClassifierCV(
-            base_estimator=estimator,
-            method="sigmoid",
-            cv=3,
-        )
+    kwargs = {"method": "sigmoid", "cv": 3}
+    if "estimator" in inspect.signature(CalibratedClassifierCV).parameters:
+        kwargs["estimator"] = estimator
+    else:
+        kwargs["base_estimator"] = estimator
+    return CalibratedClassifierCV(**kwargs)
+
+
+def _calibrated_estimator_param(estimator, nested_parameter: str) -> str:
+    params = estimator.get_params()
+    for prefix in ("estimator", "base_estimator"):
+        candidate = f"{prefix}__{nested_parameter}"
+        if candidate in params:
+            return candidate
+    raise ValueError(f"Could not find calibrated-estimator parameter for '{nested_parameter}'.")
+
+
+def parse_c_grid(values: Sequence[float] | str | None) -> tuple[float, ...]:
+    """Normalize a regularization-strength grid for CLI and API callers."""
+    if values is None:
+        return DEFAULT_TUNING_C_GRID
+    if isinstance(values, str):
+        values = [value.strip() for value in values.split(",") if value.strip()]
+    grid = tuple(float(value) for value in values)
+    if not grid:
+        raise ValueError("At least one C value is required for hyperparameter tuning.")
+    if any(value <= 0 for value in grid):
+        raise ValueError("All C values must be positive.")
+    return grid
+
+
+def normalize_tuning_scoring(scoring: str) -> str:
+    """Normalize inner-CV scoring names."""
+    normalized = scoring.lower().replace("-", "_")
+    if normalized not in TUNING_SCORING_CHOICES:
+        raise ValueError(f"Unknown tuning scoring '{scoring}'. Available values: {', '.join(TUNING_SCORING_CHOICES)}.")
+    return normalized
 
 
 def normalize_decoder_name(name: str) -> str:
@@ -237,6 +363,19 @@ def make_cross_validator(labels: np.ndarray, groups: np.ndarray | None, n_splits
         np.zeros_like(labels),
         labels,
     )
+
+
+def make_tuning_cross_validator(labels: np.ndarray, groups: np.ndarray | None, n_splits: int):
+    """Create feasible inner-CV splits for nested decoder hyperparameter tuning."""
+    _, class_counts = np.unique(labels, return_counts=True)
+    if len(class_counts) < 2:
+        raise ValueError("Need at least two classes for decoder hyperparameter tuning.")
+    feasible_splits = min(int(n_splits), int(np.min(class_counts)))
+    if groups is not None:
+        feasible_splits = min(feasible_splits, len(np.unique(groups)))
+    if feasible_splits < 2:
+        raise ValueError("Need at least two examples per class and two groups when grouped to tune decoder hyperparameters.")
+    return list(make_cross_validator(labels, groups, feasible_splits))
 
 
 def time_windows(times: np.ndarray, window_ms: float, step_ms: float) -> list[tuple[int, int, float]]:
