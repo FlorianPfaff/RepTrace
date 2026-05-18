@@ -11,7 +11,17 @@ from reptrace.metadata import prepare_binary_metadata
 from reptrace.mne_time_decode import run_time_resolved_decode
 from reptrace.plot_time_decode import plot_time_decode_results
 from reptrace.results import aggregate_time_decode_csvs
-from reptrace.decoding import DECODER_CHOICES, EMISSION_MODE_CHOICES, normalize_decoder_name, normalize_emission_mode
+from reptrace.decoding import (
+    DECODER_CHOICES,
+    EMISSION_MODE_CHOICES,
+    FEATURE_PREPROCESSOR_CHOICES,
+    TUNING_SCORING_CHOICES,
+    normalize_decoder_name,
+    normalize_emission_mode,
+    normalize_feature_preprocessor,
+    normalize_tuning_scoring,
+    parse_c_grid,
+)
 
 EMISSION_RUN_CHOICES = (*EMISSION_MODE_CHOICES, "both")
 
@@ -79,7 +89,7 @@ def _required_path(row: pd.Series, column: str, base_dir: Path) -> Path:
 
 
 def _safe_name(value: str) -> str:
-    return value.lower().replace("-", "_").replace(" ", "_")
+    return value.lower().replace("-", "_").replace(" ", "_").replace(".", "p").replace("|", "_")
 
 
 def _decoder_output_stem(subject: str, decoder: str, has_decoder_column: bool) -> str:
@@ -93,12 +103,32 @@ def _output_stem(
     *,
     has_decoder_column: bool,
     has_emission_mode_column: bool,
+    variant: str | None = None,
+    feature_preprocessor: str = "none",
+    pca_components: str | None = None,
+    tune_hyperparameters: bool = False,
+    tuning_scoring: str = "accuracy",
+    has_feature_preprocessor_column: bool = False,
+    has_pca_components_column: bool = False,
+    has_tune_hyperparameters_column: bool = False,
+    has_tuning_scoring_column: bool = False,
 ) -> str:
     parts = [subject]
+    if variant is not None:
+        parts.append(_safe_name(variant))
+        return "_".join(parts)
     if has_decoder_column:
         parts.append(_safe_name(decoder))
     if has_emission_mode_column:
         parts.append(_safe_name(emission_mode))
+    if has_feature_preprocessor_column:
+        parts.append(_safe_name(feature_preprocessor))
+    if has_pca_components_column and pca_components is not None:
+        parts.append(f"pca{_safe_name(str(pca_components))}")
+    if has_tune_hyperparameters_column:
+        parts.append("tuned" if tune_hyperparameters else "untuned")
+    if has_tuning_scoring_column and tune_hyperparameters:
+        parts.append(_safe_name(tuning_scoring))
     return "_".join(parts)
 
 
@@ -151,6 +181,12 @@ def run_benchmark_manifest(
     default_max_iter: int = 1000,
     default_decoder: str = "logistic",
     default_emission_mode: str = "calibrated",
+    default_feature_preprocessor: str = "none",
+    default_pca_components: str | None = None,
+    default_tune_hyperparameters: bool = False,
+    default_tuning_cv_splits: int = 3,
+    default_tuning_scoring: str = "accuracy",
+    default_tuning_c_grid: str | None = None,
     calibration_dir: Path | None = None,
     calibration_bins: int = 10,
     observation_dir: Path | None = None,
@@ -180,12 +216,31 @@ def run_benchmark_manifest(
         emission_mode = _string_value(row, "emission_mode", default_emission_mode) or default_emission_mode
         if emission_mode != "both":
             emission_mode = normalize_emission_mode(emission_mode)
+        feature_preprocessor = normalize_feature_preprocessor(
+            _string_value(row, "feature_preprocessor", default_feature_preprocessor) or default_feature_preprocessor
+        )
+        pca_components = _string_value(row, "pca_components", default_pca_components)
+        tune_hyperparameters = _bool_value(row, "tune_hyperparameters", default_tune_hyperparameters)
+        tuning_cv_splits = _int_value(row, "tuning_cv_splits", default_tuning_cv_splits)
+        tuning_scoring = normalize_tuning_scoring(
+            _string_value(row, "tuning_scoring", default_tuning_scoring) or default_tuning_scoring
+        )
+        tuning_c_grid = _string_value(row, "tuning_c_grid", default_tuning_c_grid)
         output_stem = _output_stem(
             subject,
             decoder,
             emission_mode,
             has_decoder_column="decoder" in manifest.columns,
             has_emission_mode_column="emission_mode" in manifest.columns,
+            variant=_string_value(row, "variant"),
+            feature_preprocessor=feature_preprocessor,
+            pca_components=pca_components,
+            tune_hyperparameters=tune_hyperparameters,
+            tuning_scoring=tuning_scoring,
+            has_feature_preprocessor_column="feature_preprocessor" in manifest.columns,
+            has_pca_components_column="pca_components" in manifest.columns,
+            has_tune_hyperparameters_column="tune_hyperparameters" in manifest.columns,
+            has_tuning_scoring_column="tuning_scoring" in manifest.columns,
         )
 
         output_csv = _resolve_path(_string_value(row, "out_csv"), manifest_dir)
@@ -228,6 +283,12 @@ def run_benchmark_manifest(
             max_iter=_int_value(row, "max_iter", default_max_iter),
             decoder=decoder,
             emission_mode=emission_mode,
+            feature_preprocessor=feature_preprocessor,
+            pca_components=pca_components,
+            tune_hyperparameters=tune_hyperparameters,
+            tuning_cv_splits=tuning_cv_splits,
+            tuning_scoring=tuning_scoring,
+            tuning_c_grid=tuning_c_grid,
             calibration_out_path=calibration_out_csv,
             calibration_bins=_int_value(row, "calibration_bins", calibration_bins),
             observation_out_path=observation_out_csv,
@@ -294,6 +355,12 @@ def main() -> None:
     parser.add_argument("--max-iter", type=int, default=1000)
     parser.add_argument("--decoder", choices=DECODER_CHOICES, default="logistic")
     parser.add_argument("--emission-mode", choices=EMISSION_RUN_CHOICES, default="calibrated")
+    parser.add_argument("--feature-preprocessor", choices=(*FEATURE_PREPROCESSOR_CHOICES, "pca-whiten"), default="none")
+    parser.add_argument("--pca-components")
+    parser.add_argument("--tune-hyperparameters", action="store_true")
+    parser.add_argument("--tuning-cv-splits", type=int, default=3)
+    parser.add_argument("--tuning-scoring", choices=TUNING_SCORING_CHOICES, default="accuracy")
+    parser.add_argument("--tuning-c-grid", default=",".join(str(value) for value in parse_c_grid(None)))
     parser.add_argument("--calibration-dir", type=Path)
     parser.add_argument("--calibration-bins", type=int, default=10)
     parser.add_argument("--observation-dir", type=Path, help="Optional directory for held-out trial/time probability observation CSVs.")
@@ -321,6 +388,12 @@ def main() -> None:
         default_max_iter=args.max_iter,
         default_decoder=args.decoder,
         default_emission_mode=args.emission_mode,
+        default_feature_preprocessor=args.feature_preprocessor,
+        default_pca_components=args.pca_components,
+        default_tune_hyperparameters=args.tune_hyperparameters,
+        default_tuning_cv_splits=args.tuning_cv_splits,
+        default_tuning_scoring=args.tuning_scoring,
+        default_tuning_c_grid=args.tuning_c_grid,
         calibration_dir=args.calibration_dir,
         calibration_bins=args.calibration_bins,
         observation_dir=args.observation_dir,

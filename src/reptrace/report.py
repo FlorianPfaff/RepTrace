@@ -12,6 +12,13 @@ COMPARISON_GROUP_COLUMNS = SUMMARY_GROUP_COLUMNS
 SUBJECT_TABLE_LABELS = {
     "decoder": "Decoder",
     "emission_mode": "Emission mode",
+    "feature_preprocessor": "Feature preprocessor",
+    "pca_components": "PCA components",
+    "tuned_hyperparameters": "Tuned",
+    "tuning_cv_splits": "Tuning CV splits",
+    "tuning_scoring": "Tuning scoring",
+    "tuning_c_grid": "Tuning C grid",
+    "temporal_mode": "Temporal mode",
 }
 
 
@@ -41,11 +48,29 @@ def _iter_groups(frame: pd.DataFrame, group_columns: list[str]):
 
 def _active_subject_group_columns(results: pd.DataFrame, csv_paths: list[Path]) -> list[str]:
     columns = _comparison_group_columns(results)
-    if "emission_mode" in columns and not _raw_csv_has_column(csv_paths, "emission_mode"):
-        columns = [column for column in columns if column != "emission_mode"]
-    if any(results[column].nunique(dropna=False) > 1 for column in columns):
-        return columns
-    return []
+    candidate_columns = []
+    for column in columns:
+        if column == "emission_mode" and not _raw_csv_has_column(csv_paths, "emission_mode"):
+            continue
+        candidate_columns.append(column)
+
+    varying_columns = []
+    for column in candidate_columns:
+        if results[column].nunique(dropna=False) > 1:
+            varying_columns.append(column)
+    if not varying_columns:
+        return []
+
+    active = ["decoder"] if "decoder" in candidate_columns else []
+    active.extend(column for column in varying_columns if column != "decoder")
+    return active
+
+
+def _display_group_columns(frame: pd.DataFrame) -> list[str]:
+    columns = _comparison_group_columns(frame)
+    display = ["decoder"] if "decoder" in columns else []
+    display.extend(column for column in columns if column != "decoder" and frame[column].nunique(dropna=False) > 1)
+    return display
 
 
 def _filter_subject_summary_to_summary_groups(subject_summary: pd.DataFrame, summary: pd.DataFrame) -> pd.DataFrame:
@@ -213,7 +238,34 @@ def build_time_decode_report(
             baseline_window=baseline_window,
             effect_window=effect_window,
         )
-        has_emission_mode = "emission_mode" in comparison.columns
+        display_group_columns = _display_group_columns(comparison)
+        group_headers = [
+            SUBJECT_TABLE_LABELS.get(column, column.replace("_", " ").title()) for column in display_group_columns
+        ]
+        headers = [
+            *group_headers,
+            "Subjects",
+            "Peak time (s)",
+            "Peak accuracy",
+            "Baseline accuracy",
+            "Effect accuracy",
+            "Effect minus baseline",
+            "Peak log loss",
+            "Peak Brier",
+            "Peak ECE",
+        ]
+        alignments = [
+            *("---" for _ in group_headers),
+            "---:",
+            "---:",
+            "---:",
+            "---:",
+            "---:",
+            "---:",
+            "---:",
+            "---:",
+            "---:",
+        ]
         lines = [
             "# RepTrace Decoder Comparison Report",
             "",
@@ -221,25 +273,14 @@ def build_time_decode_report(
             f"- Baseline window: {_format_float(baseline_window[0])} to {_format_float(baseline_window[1])} s",
             f"- Effect window: {_format_float(effect_window[0])} to {_format_float(effect_window[1])} s",
             "",
+            f"| {' | '.join(headers)} |",
+            f"| {' | '.join(alignments)} |",
         ]
-        if has_emission_mode:
-            lines.extend(
-                [
-                    "| Decoder | Emission mode | Subjects | Peak time (s) | Peak accuracy | Baseline accuracy | Effect accuracy | Effect minus baseline | Peak log loss | Peak Brier | Peak ECE |",
-                    "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
-                ]
-            )
-        else:
-            lines.extend(
-                [
-                    "| Decoder | Subjects | Peak time (s) | Peak accuracy | Baseline accuracy | Effect accuracy | Effect minus baseline | Peak log loss | Peak Brier | Peak ECE |",
-                    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
-                ]
-            )
         for row in comparison.itertuples(index=False):
-            emission_prefix = f"| {row.decoder} | {row.emission_mode} |" if has_emission_mode else f"| {row.decoder} |"
+            group_values = [str(getattr(row, column)) for column in display_group_columns]
+            prefix = f"| {' | '.join(group_values)} |" if group_values else "|"
             lines.append(
-                f"{emission_prefix} {row.n_subjects} | {_format_float(row.peak_time)} | {_format_float(row.peak_accuracy)} | "
+                f"{prefix} {row.n_subjects} | {_format_float(row.peak_time)} | {_format_float(row.peak_accuracy)} | "
                 f"{_format_float(row.baseline_accuracy_mean)} | {_format_float(row.effect_accuracy_mean)} | {_format_float(row.effect_minus_baseline)} | "
                 f"{_format_float(row.peak_log_loss)} | {_format_float(row.peak_brier)} | {_format_float(row.peak_ece)} |"
             )

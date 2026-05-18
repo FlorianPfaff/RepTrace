@@ -12,6 +12,13 @@ def _fake_decode(**kwargs):
             "fold": [0, 1],
             "decoder": [kwargs.get("decoder", "logistic"), kwargs.get("decoder", "logistic")],
             "emission_mode": [kwargs.get("emission_mode", "calibrated"), kwargs.get("emission_mode", "calibrated")],
+            "feature_preprocessor": [kwargs.get("feature_preprocessor", "none"), kwargs.get("feature_preprocessor", "none")],
+            "pca_components": ["" if kwargs.get("pca_components") is None else kwargs.get("pca_components")] * 2,
+            "tuned_hyperparameters": [kwargs.get("tune_hyperparameters", False)] * 2,
+            "tuning_cv_splits": [kwargs.get("tuning_cv_splits", "") if kwargs.get("tune_hyperparameters", False) else ""] * 2,
+            "tuning_scoring": [kwargs.get("tuning_scoring", "") if kwargs.get("tune_hyperparameters", False) else ""] * 2,
+            "tuning_c_grid": [kwargs.get("tuning_c_grid", "") if kwargs.get("tune_hyperparameters", False) else ""] * 2,
+            "temporal_mode": ["same_time", "same_time"],
             "time": [0.1, 0.1],
             "accuracy": [0.6, 0.8],
             "log_loss": [0.5, 0.4],
@@ -30,6 +37,13 @@ def _fake_decode(**kwargs):
                 "fold": [0],
                 "decoder": [kwargs.get("decoder", "logistic")],
                 "emission_mode": [kwargs.get("emission_mode", "calibrated")],
+                "feature_preprocessor": [kwargs.get("feature_preprocessor", "none")],
+                "pca_components": ["" if kwargs.get("pca_components") is None else kwargs.get("pca_components")],
+                "tuned_hyperparameters": [kwargs.get("tune_hyperparameters", False)],
+                "tuning_cv_splits": [kwargs.get("tuning_cv_splits", "") if kwargs.get("tune_hyperparameters", False) else ""],
+                "tuning_scoring": [kwargs.get("tuning_scoring", "") if kwargs.get("tune_hyperparameters", False) else ""],
+                "tuning_c_grid": [kwargs.get("tuning_c_grid", "") if kwargs.get("tune_hyperparameters", False) else ""],
+                "temporal_mode": ["same_time"],
                 "time": [0.1],
                 "sample_index": [0],
                 "sequence_id": [0],
@@ -198,6 +212,35 @@ def test_run_benchmark_manifest_supports_emission_mode_column(tmp_path: Path, mo
     ]
     summary = pd.read_csv(run.aggregate_csv)
     assert sorted(summary["emission_mode"].unique().tolist()) == ["calibrated", "uncalibrated"]
+
+
+def test_run_benchmark_manifest_supports_tuned_pca_whiten_variant(tmp_path: Path, monkeypatch):
+    manifest = tmp_path / "manifest.csv"
+    manifest.write_text(
+        "subject,epochs,metadata_csv,label_column,decoder,feature_preprocessor,pca_components,tune_hyperparameters,tuning_cv_splits,tuning_scoring,tuning_c_grid\n"
+        "sub-01,data/sub-01_epo.fif,data/sub-01_metadata.csv,condition,logistic,pca-whiten,0.95,true,2,balanced_accuracy,\"0.1,1,10\"\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_decode(**kwargs):
+        calls.append(kwargs)
+        return _fake_decode(**kwargs)
+
+    monkeypatch.setattr("reptrace.benchmark.run_time_resolved_decode", fake_decode)
+
+    run = run_benchmark_manifest(manifest, out_dir=tmp_path / "results")
+
+    assert calls[0]["feature_preprocessor"] == "pca_whiten"
+    assert calls[0]["pca_components"] == "0.95"
+    assert calls[0]["tune_hyperparameters"] is True
+    assert calls[0]["tuning_cv_splits"] == 2
+    assert calls[0]["tuning_scoring"] == "balanced_accuracy"
+    assert calls[0]["tuning_c_grid"] == "0.1,1,10"
+    assert run.result_csvs[0].name == "sub-01_logistic_pca_whiten_pca0p95_tuned_balanced_accuracy_time_decode.csv"
+    summary = pd.read_csv(run.aggregate_csv)
+    assert summary["feature_preprocessor"].unique().tolist() == ["pca_whiten"]
+    assert summary["tuned_hyperparameters"].unique().tolist() == [True]
 
 
 def test_run_benchmark_manifest_resume_skips_complete_existing_rows(tmp_path: Path, monkeypatch):
