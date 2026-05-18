@@ -35,6 +35,15 @@ mne = "*"
 numpy = "*"
 pandas = "*"
 scikit-learn = "*"
+xgboost = { version = "*", optional = true }
+torch = { version = "*", optional = true }
+pytorch-lightning = { version = "*", optional = true }
+
+[tool.poetry.extras]
+xgboost = ["xgboost"]
+torch = ["torch", "pytorch-lightning"]
+ml = ["xgboost", "torch", "pytorch-lightning"]
+all = ["xgboost", "torch", "pytorch-lightning"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "*"
