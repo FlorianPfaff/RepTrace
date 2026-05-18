@@ -1,26 +1,13 @@
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
-
 import mne
 import numpy as np
 import pandas as pd
 
-
-def _load_stage_module():
-    module_path = Path(__file__).resolve().parents[1] / "scripts" / "stage_things_eeg2_preprocessed.py"
-    spec = importlib.util.spec_from_file_location("stage_things_eeg2_preprocessed", module_path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+from reptrace import stage_things_eeg2_preprocessed as stage
 
 
 def test_stage_subject_and_manifest_from_author_preprocessed_arrays(tmp_path):
-    stage = _load_stage_module()
     subject_dir = tmp_path / "eeg_dataset" / "preprocessed_data" / "sub-01"
     subject_dir.mkdir(parents=True)
     payload = {
