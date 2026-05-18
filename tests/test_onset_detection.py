@@ -286,6 +286,32 @@ def test_detect_onsets_from_csvs_writes_outputs(tmp_path: Path):
     assert written["threshold_method"].iloc[0] == "point"
 
 
+def test_detect_onsets_from_csvs_uses_event_window_for_threshold_summary(tmp_path: Path):
+    observations_path = tmp_path / "observations.csv"
+    events_path = tmp_path / "events.csv"
+    summary_path = tmp_path / "summary.csv"
+    threshold_summary_path = tmp_path / "threshold_summary.csv"
+    _observation_frame().to_csv(observations_path, index=False)
+
+    detect_onsets_from_csvs(
+        [observations_path],
+        threshold_window=(-0.20, -0.10),
+        threshold_quantile=0.875,
+        event_window=(0.14, 0.16),
+        detection_window=(0.0, float("inf")),
+        out_events=events_path,
+        out_summary=summary_path,
+        out_threshold_summary=threshold_summary_path,
+    )
+
+    threshold_summary = pd.read_csv(threshold_summary_path)
+    row = threshold_summary.iloc[0]
+    assert row["detection_window_start"] == 0.14
+    assert row["detection_window_stop"] == 0.16
+    assert row["post_stimulus_n_observations"] == 4
+    assert row["post_stimulus_detection_count"] == 3
+
+
 def test_detect_onsets_from_csvs_uses_detection_window_for_events(tmp_path: Path):
     observations_path = tmp_path / "observations.csv"
     _observation_frame().to_csv(observations_path, index=False)
