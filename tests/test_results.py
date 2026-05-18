@@ -128,3 +128,60 @@ def test_peak_metric_rows_breaks_ties_toward_preferred_time():
     assert logistic["time"] == -0.1
     assert logistic["accuracy"] == 0.8
     assert round(float(logistic["peak_distance_to_prefer_time"]), 3) == 0.1
+
+
+def test_summarize_metric_table_reports_rich_chance_and_permutation_fields():
+    frame = pd.DataFrame(
+        {
+            "decoder": ["logistic", "logistic", "logistic"],
+            "window": [0.1, 0.1, 0.1],
+            "participant": ["s1", "s2", "s3"],
+            "accuracy": [0.40, 0.30, 0.80],
+            "chance_accuracy": [0.50, 0.25, None],
+            "n_validation_classes": [2, 4, 2],
+            "permutation_p_value": [0.04, 0.20, 0.006],
+        }
+    )
+
+    summary = summarize_metric_table(
+        frame,
+        "accuracy",
+        ("decoder", "window"),
+        participant_column="participant",
+        chance_column="chance_accuracy",
+        percent_scale=100.0,
+        chance_percent_column="chance_percent",
+        chance_class_columns=("chance_classes", "n_chance_classes", "n_validation_classes"),
+        permutation_p_column="permutation_p_value",
+        zero_singleton_dispersion=True,
+    )
+
+    row = summary.iloc[0]
+    assert row["n_participants"] == 3
+    assert round(float(row["percent_mean"]), 3) == 50.0
+    assert round(float(row["chance_accuracy_mean"]), 3) == 0.417
+    assert round(float(row["chance_percent"]), 3) == 41.667
+    assert row["chance_accuracy_min"] == 0.25
+    assert row["chance_accuracy_max"] == 0.50
+    assert round(float(row["chance_classes_mean"]), 3) == 2.667
+    assert row["chance_classes_counts"] == "2:2;4:1"
+    assert row["accuracy_above_chance_count"] == 2
+    assert row["n_with_permutation"] == 3
+    assert row["n_significant_p_0.05"] == 2
+    assert row["n_significant_p_0.01"] == 1
+
+
+def test_summarize_metric_table_can_zero_singleton_dispersion():
+    frame = pd.DataFrame({"decoder": ["logistic"], "accuracy": [0.75], "chance": [0.5]})
+
+    summary = summarize_metric_table(
+        frame,
+        "accuracy",
+        "decoder",
+        chance_column="chance",
+        zero_singleton_dispersion=True,
+    )
+
+    row = summary.iloc[0]
+    assert row["accuracy_std"] == 0.0
+    assert row["accuracy_sem"] == 0.0
