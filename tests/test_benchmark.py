@@ -7,11 +7,15 @@ from reptrace.benchmark import run_benchmark_manifest
 
 def _fake_decode(**kwargs):
     out_path = kwargs["out_path"]
+    pca_components = kwargs.get("pca_components")
+    pca_components_value = "" if pca_components is None else pca_components
     frame = pd.DataFrame(
         {
             "fold": [0, 1],
             "decoder": [kwargs.get("decoder", "logistic"), kwargs.get("decoder", "logistic")],
             "emission_mode": [kwargs.get("emission_mode", "calibrated"), kwargs.get("emission_mode", "calibrated")],
+            "feature_preprocessor": [kwargs.get("feature_preprocessor", "none"), kwargs.get("feature_preprocessor", "none")],
+            "pca_components": [pca_components_value, pca_components_value],
             "time": [0.1, 0.1],
             "accuracy": [0.6, 0.8],
             "log_loss": [0.5, 0.4],
@@ -30,6 +34,8 @@ def _fake_decode(**kwargs):
                 "fold": [0],
                 "decoder": [kwargs.get("decoder", "logistic")],
                 "emission_mode": [kwargs.get("emission_mode", "calibrated")],
+                "feature_preprocessor": [kwargs.get("feature_preprocessor", "none")],
+                "pca_components": [pca_components_value],
                 "time": [0.1],
                 "sample_index": [0],
                 "sequence_id": [0],
@@ -118,6 +124,40 @@ def test_run_benchmark_manifest_supports_decoder_column(tmp_path: Path, monkeypa
     assert [path.name for path in run.result_csvs] == ["sub-01_logistic_time_decode.csv", "sub-01_lda_time_decode.csv"]
     summary = pd.read_csv(run.aggregate_csv)
     assert summary["decoder"].tolist() == ["lda", "logistic"]
+
+
+def test_run_benchmark_manifest_supports_feature_preprocessor_grid(tmp_path: Path, monkeypatch):
+    manifest = tmp_path / "manifest.csv"
+    manifest.write_text(
+        "subject,epochs,metadata_csv,label_column,decoder,feature_preprocessor,pca_components\n"
+        "sub-01,data/sub-01_epo.fif,data/sub-01_metadata.csv,condition,logistic,none,\n"
+        "sub-01,data/sub-01_epo.fif,data/sub-01_metadata.csv,condition,logistic,pca,0.95\n"
+        "sub-01,data/sub-01_epo.fif,data/sub-01_metadata.csv,condition,logistic,pca-whiten,32\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_decode(**kwargs):
+        calls.append(kwargs)
+        return _fake_decode(**kwargs)
+
+    monkeypatch.setattr("reptrace.benchmark.run_time_resolved_decode", fake_decode)
+
+    run = run_benchmark_manifest(manifest, out_dir=tmp_path / "results")
+
+    assert [(call["feature_preprocessor"], call["pca_components"]) for call in calls] == [
+        ("none", None),
+        ("pca", 0.95),
+        ("pca_whiten", 32),
+    ]
+    assert [path.name for path in run.result_csvs] == [
+        "sub-01_logistic_none_time_decode.csv",
+        "sub-01_logistic_pca_0p95_time_decode.csv",
+        "sub-01_logistic_pca_whiten_32_time_decode.csv",
+    ]
+    summary = pd.read_csv(run.aggregate_csv, dtype={"pca_components": "string"})
+    assert summary["feature_preprocessor"].tolist() == ["none", "pca", "pca_whiten"]
+    assert summary["pca_components"].fillna("").tolist() == ["", "0.95", "32"]
 
 
 def test_run_benchmark_manifest_passes_calibration_output_paths(tmp_path: Path, monkeypatch):
@@ -215,6 +255,8 @@ def test_run_benchmark_manifest_resume_skips_complete_existing_rows(tmp_path: Pa
             "subject": ["sub-01"],
             "fold": [0],
             "decoder": ["logistic"],
+            "feature_preprocessor": ["none"],
+            "pca_components": [""],
             "time": [0.1],
             "accuracy": [0.6],
             "log_loss": [0.5],
@@ -253,6 +295,8 @@ def test_run_benchmark_manifest_resume_reruns_when_calibration_is_missing(tmp_pa
             "subject": ["sub-01"],
             "fold": [0],
             "decoder": ["logistic"],
+            "feature_preprocessor": ["none"],
+            "pca_components": [""],
             "time": [0.1],
             "accuracy": [0.6],
             "log_loss": [0.5],
@@ -294,6 +338,8 @@ def test_run_benchmark_manifest_resume_reruns_when_observations_are_missing(tmp_
             "subject": ["sub-01"],
             "fold": [0],
             "decoder": ["logistic"],
+            "feature_preprocessor": ["none"],
+            "pca_components": [""],
             "time": [0.1],
             "accuracy": [0.6],
             "log_loss": [0.5],
