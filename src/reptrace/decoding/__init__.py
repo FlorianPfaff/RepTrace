@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 from collections.abc import Sequence
 
 import numpy as np
@@ -60,25 +59,36 @@ def make_decoder(
 
     Optional feature preprocessing is inserted after fold-local standardization
     and before the classifier. This keeps low-rank transforms such as PCA inside
-    each cross-validation fold and prevents train/test leakage. When
-    ``tune_hyperparameters`` is enabled, the returned estimator is a
-    ``GridSearchCV`` wrapper around the same decoder family.
+    each cross-validation fold and prevents train/test leakage.
+
+    When ``tune_hyperparameters`` is enabled, the returned estimator is a
+    ``GridSearchCV`` wrapper around the same decoder family. Callers can pass an
+    integer CV count or precomputed inner-CV splits via ``tuning_cv``; the MNE
+    decoding workflow supplies group-preserving inner splits when groups exist.
     """
     normalized = normalize_decoder_name(name)
     emission_mode = normalize_emission_mode(emission_mode)
-    feature_steps = _feature_preprocessor_steps(feature_preprocessor, pca_components)
+    feature_preprocessor_name = normalize_feature_preprocessor(feature_preprocessor)
+    if feature_preprocessor_name == "none":
+        if pca_components is not None:
+            raise ValueError("pca_components can only be set when feature_preprocessor is 'pca' or 'pca_whiten'.")
+        pca_components_value = None
+    else:
+        pca_components_value = normalize_pca_components(pca_components)
 
     if tune_hyperparameters:
         return make_tuned_decoder(
             normalized,
             max_iter=max_iter,
             emission_mode=emission_mode,
-            feature_preprocessor=feature_preprocessor,
-            pca_components=pca_components,
+            feature_preprocessor=feature_preprocessor_name,
+            pca_components=pca_components_value,
             cv=tuning_cv,
             scoring=tuning_scoring,
             c_grid=tuning_c_grid,
         )
+
+    feature_steps = _feature_preprocessor_steps(feature_preprocessor_name, pca_components_value)
 
     if normalized == "logistic":
         return make_pipeline(
@@ -107,7 +117,7 @@ def make_decoder(
     )
     if emission_mode == "uncalibrated":
         return linear_svm
-    return _make_calibrated_classifier(linear_svm)
+    return _make_calibrated_classifier(linear_svm, method="sigmoid", cv=3)
 
 
 def make_tuned_decoder(
@@ -130,9 +140,9 @@ def make_tuned_decoder(
     """
     normalized = normalize_decoder_name(name)
     emission_mode = normalize_emission_mode(emission_mode)
-    feature_steps = _feature_preprocessor_steps(feature_preprocessor, pca_components)
     scoring = normalize_tuning_scoring(scoring)
     c_grid = parse_c_grid(c_grid)
+    feature_steps = _feature_preprocessor_steps(feature_preprocessor, pca_components)
 
     if normalized == "logistic":
         estimator = make_pipeline(
@@ -176,7 +186,7 @@ def make_tuned_decoder(
             estimator = linear_svm
             param_grid = {"linearsvc__C": c_grid}
         else:
-            estimator = _make_calibrated_classifier(linear_svm)
+            estimator = _make_calibrated_classifier(linear_svm, method="sigmoid", cv=3)
             param_grid = {_calibrated_estimator_param(estimator, "linearsvc__C"): c_grid}
 
     return GridSearchCV(
@@ -188,13 +198,19 @@ def make_tuned_decoder(
     )
 
 
-def _make_calibrated_classifier(estimator):
-    kwargs = {"method": "sigmoid", "cv": 3}
-    if "estimator" in inspect.signature(CalibratedClassifierCV).parameters:
-        kwargs["estimator"] = estimator
-    else:
-        kwargs["base_estimator"] = estimator
-    return CalibratedClassifierCV(**kwargs)
+def _make_calibrated_classifier(estimator, *, method: str = "sigmoid", cv: int = 3):
+    try:
+        return CalibratedClassifierCV(
+            estimator=estimator,
+            method=method,
+            cv=cv,
+        )
+    except TypeError:
+        return CalibratedClassifierCV(
+            base_estimator=estimator,
+            method=method,
+            cv=cv,
+        )
 
 
 def _calibrated_estimator_param(estimator, nested_parameter: str) -> str:
