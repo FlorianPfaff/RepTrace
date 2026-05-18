@@ -28,6 +28,7 @@ from reptrace.decoding.hyperalignment import (
     fit_projection_to_hyperalignment,
     transform_with_projection,
 )
+from reptrace.decoding.sampling import DEFAULT_CLASS_LIMIT_SEED, DEFAULT_CLASS_LIMIT_SELECTION
 
 HYPERALIGNMENT_INITIALIZATION_MODES = ("pca", "mean")
 
@@ -70,6 +71,8 @@ def fit_class_hyperalignment(
     *,
     sample_mode: str = "class_mean",
     n_repetitions_per_class: int | None = None,
+    repetition_selection: str = DEFAULT_CLASS_LIMIT_SELECTION,
+    repetition_seed: int | str | None = DEFAULT_CLASS_LIMIT_SEED,
     n_components: int | float = 64,
     n_iterations: int = 10,
     template_tolerance: float = 1e-8,
@@ -82,6 +85,8 @@ def fit_class_hyperalignment(
         labels_by_subject,
         sample_mode=sample_mode,
         n_repetitions_per_class=n_repetitions_per_class,
+        repetition_selection=repetition_selection,
+        repetition_seed=repetition_seed,
     )
     model = fit_hyperalignment(
         alignment.aligned_by_subject,
