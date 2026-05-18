@@ -22,6 +22,10 @@ def test_grouped_cli_dispatches_to_module_main(monkeypatch):
     assert calls == [("reptrace fake", "--value", "42")]
 
 
+def test_grouped_cli_registers_things_eeg2_staging_command():
+    assert cli.COMMAND_MODULES["stage-things-eeg2"] == "reptrace.stage_things_eeg2_preprocessed"
+
+
 def test_grouped_cli_without_command_prints_help(capsys):
     assert cli.main([]) == 0
     captured = capsys.readouterr()
