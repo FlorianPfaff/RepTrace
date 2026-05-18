@@ -22,6 +22,7 @@ from reptrace.decoding.mcca import (
     _label_vector,
     _normalize_sample_mode,
 )
+from reptrace.decoding.sampling import DEFAULT_CLASS_LIMIT_SEED, DEFAULT_CLASS_LIMIT_SELECTION
 
 
 @dataclass(frozen=True)
@@ -72,12 +73,15 @@ def class_alignment_matrix(
     classes: Sequence | np.ndarray | None = None,
     sample_mode: str = "class_mean",
     n_repetitions_per_class: int | None = None,
+    repetition_selection: str = DEFAULT_CLASS_LIMIT_SELECTION,
+    repetition_seed: int | str | None = DEFAULT_CLASS_LIMIT_SEED,
 ) -> np.ndarray:
     """Build one subject's class-aligned feature matrix.
 
     ``classes`` fixes the row order.  This is useful for held-out target
     calibration where the target rows must match an already fitted class
-    alignment or M-CCA component template.
+    alignment or M-CCA component template. For ``class_repetition``, use the
+    same ``repetition_selection`` and ``repetition_seed`` as the fitted template.
     """
 
     sample_mode = _normalize_sample_mode(sample_mode)
@@ -97,7 +101,14 @@ def class_alignment_matrix(
     repetitions = int(n_repetitions_per_class)
     if repetitions < 1:
         raise ValueError("n_repetitions_per_class must be positive or None.")
-    return _class_repetition_matrix(matrix, vector, class_order, repetitions)
+    return _class_repetition_matrix(
+        matrix,
+        vector,
+        class_order,
+        repetitions,
+        selection=repetition_selection,
+        seed=repetition_seed,
+    )
 
 
 def fit_target_mcca_projection(

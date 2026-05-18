@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from reptrace.decoding import (
+    DEFAULT_CLASS_LIMIT_SELECTION,
     normalize_class_limit_seed,
     normalize_class_limit_selection,
     select_class_limited_indices,
@@ -14,6 +15,17 @@ def test_select_class_limited_indices_keeps_all_when_uncapped():
     selected = select_class_limited_indices(labels, None)
 
     assert selected.tolist() == [0, 1, 2, 3]
+
+
+def test_select_class_limited_indices_defaults_to_seeded_random_selection():
+    labels = np.array([1, 2, 1, 2, 1, 2])
+
+    selected = select_class_limited_indices(labels, 2)
+    repeated = select_class_limited_indices(labels, 2)
+
+    assert DEFAULT_CLASS_LIMIT_SELECTION == "random"
+    assert selected.tolist() == [1, 2, 4, 5]
+    assert repeated.tolist() == selected.tolist()
 
 
 def test_select_class_limited_indices_first_preserves_input_order():

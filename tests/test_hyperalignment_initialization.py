@@ -47,6 +47,8 @@ def test_class_hyperalignment_accepts_mean_initialization():
 
     assert alignment.sample_mode == "class_repetition"
     assert alignment.n_repetitions_per_class == 2
+    assert alignment.repetition_selection == "random"
+    assert alignment.repetition_seed == 0
     assert model.template.shape == (6, 3)
 
 
