@@ -9,6 +9,15 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
 
+from reptrace.decoding.sampling import (
+    CLASS_LIMIT_SELECTION_MODES,
+    DEFAULT_CLASS_LIMIT_SEED,
+    DEFAULT_CLASS_LIMIT_SELECTION,
+    normalize_class_limit_seed,
+    normalize_class_limit_selection,
+    select_class_limited_indices,
+)
+
 DECODER_CHOICES = ("logistic", "lda", "linear_svm")
 EMISSION_MODE_CHOICES = ("calibrated", "uncalibrated")
 
