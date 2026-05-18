@@ -28,7 +28,7 @@ __all__ = [
 ]
 
 METRIC_COLUMNS = ("accuracy", "log_loss", "brier", "ece")
-SUMMARY_GROUP_COLUMNS = ("decoder", "emission_mode")
+SUMMARY_GROUP_COLUMNS = ("decoder", "emission_mode", "feature_preprocessor", "pca_components")
 WEIGHT_COLUMN = "n_test"
 DEFAULT_ECE_BINS = 10
 
@@ -56,8 +56,7 @@ def read_time_decode_results(
             frame["subject"] = csv_path.stem
         else:
             frame["subject"] = frame["subject"].astype(str)
-        if "emission_mode" not in frame.columns:
-            frame["emission_mode"] = "calibrated"
+        frame = _normalize_summary_group_columns(frame)
         frame["source_file"] = csv_path.name
         frames.append(frame)
 
@@ -103,11 +102,7 @@ def read_probability_observations(
 
         frame["subject"] = frame["subject"].where(pd.notna(frame["subject"]), fallback_subject).astype(str)
         frame.loc[frame["subject"].str.len() == 0, "subject"] = fallback_subject
-        if "emission_mode" not in frame.columns:
-            frame["emission_mode"] = "calibrated"
-        else:
-            frame["emission_mode"] = frame["emission_mode"].where(pd.notna(frame["emission_mode"]), "calibrated").astype(str)
-            frame.loc[frame["emission_mode"].str.len() == 0, "emission_mode"] = "calibrated"
+        frame = _normalize_summary_group_columns(frame)
         frame["source_file"] = csv_path.name
         frames.append(frame)
 
@@ -200,13 +195,30 @@ def _normalize_emission_mode(frame: pd.DataFrame) -> pd.DataFrame:
     return normalized
 
 
+def _normalize_summary_group_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """Normalize optional model-condition columns before grouping.
+
+    PCA runs write an empty ``pca_components`` value for the sklearn default.
+    Pandas reads that back as NaN, and a plain groupby would drop the rows. Keep
+    those rows by converting optional grouping columns to explicit strings.
+    """
+    normalized = _normalize_emission_mode(frame).copy()
+    defaults = {"feature_preprocessor": "none", "pca_components": ""}
+    for column, default in defaults.items():
+        if column not in normalized.columns:
+            continue
+        normalized[column] = normalized[column].where(pd.notna(normalized[column]), default).astype(str)
+        normalized.loc[normalized[column].str.len() == 0, column] = default
+    return normalized
+
+
 def _prepare_observations_for_subject_time(
     results: pd.DataFrame,
     observations: pd.DataFrame,
     group_columns: list[str],
 ) -> pd.DataFrame:
     """Ensure observations carry the condition columns needed to align with results."""
-    prepared = _normalize_emission_mode(observations).copy()
+    prepared = _normalize_summary_group_columns(observations).copy()
     for column in group_columns:
         if column in prepared.columns:
             continue
@@ -284,7 +296,7 @@ def _replace_ece_from_observations(
     expected_counts: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     observation_ece = _probability_ece_by_group(
-        _normalize_emission_mode(observations),
+        _normalize_summary_group_columns(observations),
         subject_time_keys,
         n_bins=n_bins,
     )
@@ -360,7 +372,7 @@ def subject_time_metrics(
     if ece_bins < 1:
         raise ValueError("ece_bins must be positive")
 
-    results = _normalize_emission_mode(results)
+    results = _normalize_summary_group_columns(results)
     group_columns = [column for column in SUMMARY_GROUP_COLUMNS if column in results.columns]
     subject_time_keys = [*group_columns, "subject", "time"]
     subject_time = _mean_across_folds(results, subject_time_keys, metric_columns=selected_metric_columns).sort_values(
