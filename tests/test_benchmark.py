@@ -7,6 +7,10 @@ from reptrace.benchmark import run_benchmark_manifest
 
 def _fake_decode(**kwargs):
     out_path = kwargs["out_path"]
+    temporal_train_window = kwargs.get("temporal_train_window")
+    temporal_mode = "train_window_ensemble" if temporal_train_window is not None else "same_time"
+    temporal_train_start = "" if temporal_train_window is None else temporal_train_window[0]
+    temporal_train_stop = "" if temporal_train_window is None else temporal_train_window[1]
     frame = pd.DataFrame(
         {
             "fold": [0, 1],
@@ -18,7 +22,9 @@ def _fake_decode(**kwargs):
             "tuning_cv_splits": [kwargs.get("tuning_cv_splits", "") if kwargs.get("tune_hyperparameters", False) else ""] * 2,
             "tuning_scoring": [kwargs.get("tuning_scoring", "") if kwargs.get("tune_hyperparameters", False) else ""] * 2,
             "tuning_c_grid": [kwargs.get("tuning_c_grid", "") if kwargs.get("tune_hyperparameters", False) else ""] * 2,
-            "temporal_mode": ["same_time", "same_time"],
+            "temporal_mode": [temporal_mode, temporal_mode],
+            "temporal_train_window_start": [temporal_train_start, temporal_train_start],
+            "temporal_train_window_stop": [temporal_train_stop, temporal_train_stop],
             "time": [0.1, 0.1],
             "accuracy": [0.6, 0.8],
             "log_loss": [0.5, 0.4],
@@ -43,7 +49,9 @@ def _fake_decode(**kwargs):
                 "tuning_cv_splits": [kwargs.get("tuning_cv_splits", "") if kwargs.get("tune_hyperparameters", False) else ""],
                 "tuning_scoring": [kwargs.get("tuning_scoring", "") if kwargs.get("tune_hyperparameters", False) else ""],
                 "tuning_c_grid": [kwargs.get("tuning_c_grid", "") if kwargs.get("tune_hyperparameters", False) else ""],
-                "temporal_mode": ["same_time"],
+                "temporal_mode": [temporal_mode],
+                "temporal_train_window_start": [temporal_train_start],
+                "temporal_train_window_stop": [temporal_train_stop],
                 "time": [0.1],
                 "sample_index": [0],
                 "sequence_id": [0],
@@ -240,6 +248,32 @@ def test_run_benchmark_manifest_supports_tuned_pca_whiten_variant(tmp_path: Path
     assert run.result_csvs[0].name == "sub-01_logistic_pca_whiten_pca0p95_tuned_balanced_accuracy_time_decode.csv"
     summary = pd.read_csv(run.aggregate_csv)
     assert summary["feature_preprocessor"].unique().tolist() == ["pca_whiten"]
+    assert summary["tuned_hyperparameters"].unique().tolist() == [True]
+
+
+def test_run_benchmark_manifest_supports_tuned_temporal_train_window(tmp_path: Path, monkeypatch):
+    manifest = tmp_path / "manifest.csv"
+    manifest.write_text(
+        "subject,epochs,metadata_csv,label_column,decoder,tune_hyperparameters,tuning_cv_splits,tuning_scoring,tuning_c_grid,temporal_train_window_start,temporal_train_window_stop\n"
+        "sub-01,data/sub-01_epo.fif,data/sub-01_metadata.csv,condition,logistic,true,2,balanced_accuracy,\"0.1,1,10\",0.12,0.25\n",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_decode(**kwargs):
+        calls.append(kwargs)
+        return _fake_decode(**kwargs)
+
+    monkeypatch.setattr("reptrace.benchmark.run_time_resolved_decode", fake_decode)
+
+    run = run_benchmark_manifest(manifest, out_dir=tmp_path / "results")
+
+    assert calls[0]["tune_hyperparameters"] is True
+    assert calls[0]["temporal_train_window"] == (0.12, 0.25)
+    assert run.result_csvs[0].name == "sub-01_logistic_tuned_balanced_accuracy_trainwin0p12_0p25_time_decode.csv"
+    summary = pd.read_csv(run.aggregate_csv)
+    assert summary["temporal_mode"].unique().tolist() == ["train_window_ensemble"]
+    assert summary["temporal_train_window_start"].unique().tolist() == [0.12]
     assert summary["tuned_hyperparameters"].unique().tolist() == [True]
 
 

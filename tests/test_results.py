@@ -111,6 +111,25 @@ def test_aggregate_time_decode_results_keeps_preprocessing_and_tuning_separate()
     assert aggregated["accuracy_mean"].round(3).tolist() == [0.7, 0.8, 0.8, 0.9]
 
 
+def test_aggregate_time_decode_results_keeps_temporal_train_windows_separate():
+    early = _result_frame("s1")
+    early["decoder"] = "logistic"
+    early["temporal_mode"] = "train_window_ensemble"
+    early["temporal_train_window_start"] = 0.12
+    early["temporal_train_window_stop"] = 0.25
+    late = _result_frame("s1", offset=0.1)
+    late["decoder"] = "logistic"
+    late["temporal_mode"] = "train_window_ensemble"
+    late["temporal_train_window_start"] = 0.20
+    late["temporal_train_window_stop"] = 0.35
+
+    aggregated = aggregate_time_decode_results(pd.concat([early, late], ignore_index=True))
+
+    assert aggregated["temporal_train_window_start"].tolist() == ["0.12", "0.12", "0.2", "0.2"]
+    assert aggregated["temporal_train_window_stop"].tolist() == ["0.25", "0.25", "0.35", "0.35"]
+    assert aggregated["accuracy_mean"].round(3).tolist() == [0.7, 0.8, 0.8, 0.9]
+
+
 def test_summarize_metric_table_reports_participants_chance_and_scaled_values():
     frame = pd.DataFrame(
         {

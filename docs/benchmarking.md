@@ -397,6 +397,24 @@ That manifest uses `feature_preprocessor=pca-whiten`, `pca_components=0.95`,
 the C grid `0.01,0.1,1,10,100`. PCA whitening and C tuning are fitted only on
 the training split for each outer fold.
 
+Run the slower tuned temporal train-window ensemble:
+
+```bash
+python -m reptrace.benchmark \
+  benchmarks/nod_animate_logistic_tuned_temporal_ensemble_all.csv \
+  --out-dir results/nod_animate_logistic_tuned_temporal_ensemble_all \
+  --aggregate-out results/nod_animate_logistic_tuned_temporal_ensemble_all/summary.csv \
+  --plot-out results/nod_animate_logistic_tuned_temporal_ensemble_all/summary.png \
+  --calibration-dir results/nod_animate_logistic_tuned_temporal_ensemble_all/calibration \
+  --chance 0.5 \
+  --resume
+```
+
+This manifest combines `--temporal-train-window 0.12 0.25` with
+`--tune-hyperparameters`. For each outer fold, every model in the temporal
+train-window ensemble is fitted on the outer training split and tunes C with
+inner CV before its probabilities are averaged across train-window centers.
+
 Generate a decoder comparison report:
 
 ```bash
@@ -469,6 +487,18 @@ gh workflow run nod-decoder-all.yml \
   -f data_root=../data/nod \
   -f manifest_csv=benchmarks/nod_animate_logistic_tuned_pca_whiten_all.csv \
   -f output_dir=results/nod_animate_logistic_tuned_pca_whiten_all \
+  -f n_permutations=10000
+```
+
+Or run the tuned temporal train-window ensemble:
+
+```bash
+gh workflow run nod-decoder-all.yml \
+  --repo IPS-Stuttgart/RepTrace \
+  --ref main \
+  -f data_root=../data/nod \
+  -f manifest_csv=benchmarks/nod_animate_logistic_tuned_temporal_ensemble_all.csv \
+  -f output_dir=results/nod_animate_logistic_tuned_temporal_ensemble_all \
   -f n_permutations=10000
 ```
 

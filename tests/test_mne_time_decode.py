@@ -157,3 +157,40 @@ def test_run_time_resolved_decode_can_tune_decoder_hyperparameters(tmp_path: Pat
     assert results["tuned_hyperparameters"].tolist() == [True] * len(results)
     assert observations["best_params"].str.contains("logisticregression__C", regex=False).all()
     assert observations["model_hash"].nunique() >= 1
+
+
+def test_temporal_train_window_ensemble_can_tune_hyperparameters(tmp_path: Path, monkeypatch):
+    rng = np.random.default_rng(19)
+    labels = np.array(["animate", "inanimate"] * 6)
+    data = rng.normal(size=(12, 1, 5))
+    data[labels == "animate", 0, :2] += 0.75
+    metadata = pd.DataFrame({"condition": labels, "session": ["a", "a", "b", "b", "c", "c", "d", "d", "e", "e", "f", "f"]})
+    epochs = FakeEpochs(data, np.array([0.00, 0.01, 0.02, 0.03, 0.04]), metadata)
+    monkeypatch.setattr("reptrace.mne_time_decode.mne.read_epochs", lambda *args, **kwargs: epochs)
+
+    out = tmp_path / "decode_temporal_tuned.csv"
+    observations_out = tmp_path / "observations_temporal_tuned.csv"
+
+    results = run_time_resolved_decode(
+        epochs_path=tmp_path / "sub-01_epo.fif",
+        label_column="condition",
+        out_path=out,
+        n_splits=2,
+        window_ms=20,
+        step_ms=20,
+        max_iter=2000,
+        observation_out_path=observations_out,
+        temporal_train_window=(0.0, 0.03),
+        tune_hyperparameters=True,
+        tuning_cv_splits=2,
+        tuning_c_grid=(0.1, 1.0),
+    )
+    observations = pd.read_csv(observations_out)
+
+    assert results["temporal_mode"].unique().tolist() == ["train_window_ensemble"]
+    assert results["n_train_windows"].unique().tolist() == [2]
+    assert results["tuned_hyperparameters"].tolist() == [True] * len(results)
+    assert results["temporal_train_window_start"].unique().tolist() == [0.0]
+    assert results["temporal_train_window_stop"].unique().tolist() == [0.03]
+    assert observations["best_params"].str.contains("logisticregression__C", regex=False).all()
+    assert observations["model_hash"].nunique() >= 1

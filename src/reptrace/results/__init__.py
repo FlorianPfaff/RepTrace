@@ -38,6 +38,8 @@ SUMMARY_GROUP_COLUMNS = (
     "tuning_scoring",
     "tuning_c_grid",
     "temporal_mode",
+    "temporal_train_window_start",
+    "temporal_train_window_stop",
 )
 WEIGHT_COLUMN = "n_test"
 DEFAULT_ECE_BINS = 10
@@ -50,6 +52,8 @@ GROUP_COLUMN_DEFAULTS = {
     "tuning_scoring": "",
     "tuning_c_grid": "",
     "temporal_mode": "same_time",
+    "temporal_train_window_start": "",
+    "temporal_train_window_stop": "",
 }
 
 
@@ -72,6 +76,17 @@ def _normalize_group_defaults(frame: pd.DataFrame) -> pd.DataFrame:
             continue
         values = normalized[column].where(pd.notna(normalized[column]), default).astype(str)
         normalized[column] = values.mask(values.str.len() == 0, default)
+    ensemble = normalized["temporal_mode"].astype(str) == "train_window_ensemble"
+    if "train_window_start" in normalized.columns:
+        values = normalized["temporal_train_window_start"]
+        normalized.loc[ensemble & (values.astype(str).str.len() == 0), "temporal_train_window_start"] = normalized.loc[
+            ensemble, "train_window_start"
+        ].astype(str)
+    if "train_window_stop" in normalized.columns:
+        values = normalized["temporal_train_window_stop"]
+        normalized.loc[ensemble & (values.astype(str).str.len() == 0), "temporal_train_window_stop"] = normalized.loc[
+            ensemble, "train_window_stop"
+        ].astype(str)
     return normalized
 
 

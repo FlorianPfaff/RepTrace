@@ -19,6 +19,8 @@ SUBJECT_TABLE_LABELS = {
     "tuning_scoring": "Tuning scoring",
     "tuning_c_grid": "Tuning C grid",
     "temporal_mode": "Temporal mode",
+    "temporal_train_window_start": "Temporal train start",
+    "temporal_train_window_stop": "Temporal train stop",
 }
 METRIC_HIGHER_IS_BETTER = {
     "accuracy": True,

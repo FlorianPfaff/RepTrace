@@ -24,6 +24,7 @@ from reptrace.decoding import (
 )
 
 EMISSION_RUN_CHOICES = (*EMISSION_MODE_CHOICES, "both")
+TemporalTrainWindow = tuple[float, float]
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,26 @@ def _bool_value(row: pd.Series, column: str, default: bool = False) -> bool:
     return value.lower() in {"1", "true", "yes", "y"}
 
 
+def _temporal_train_window_value(
+    row: pd.Series,
+    default: TemporalTrainWindow | None = None,
+) -> TemporalTrainWindow | None:
+    start = _float_value(row, "temporal_train_window_start")
+    stop = _float_value(row, "temporal_train_window_stop")
+    if start is not None or stop is not None:
+        if start is None or stop is None:
+            raise ValueError("Manifest must set both temporal_train_window_start and temporal_train_window_stop.")
+        return (start, stop)
+
+    value = _string_value(row, "temporal_train_window")
+    if value is None:
+        return default
+    parts = value.replace(",", " ").replace("|", " ").split()
+    if len(parts) != 2:
+        raise ValueError("temporal_train_window must contain exactly two values: START STOP.")
+    return (float(parts[0]), float(parts[1]))
+
+
 def _resolve_path(value: str | None, base_dir: Path) -> Path | None:
     if value is None:
         return None
@@ -92,6 +113,10 @@ def _safe_name(value: str) -> str:
     return value.lower().replace("-", "_").replace(" ", "_").replace(".", "p").replace("|", "_")
 
 
+def _safe_window_name(window: TemporalTrainWindow) -> str:
+    return f"trainwin{_safe_name(f'{window[0]:g}')}_{_safe_name(f'{window[1]:g}')}"
+
+
 def _decoder_output_stem(subject: str, decoder: str, has_decoder_column: bool) -> str:
     return f"{subject}_{_safe_name(decoder)}" if has_decoder_column else subject
 
@@ -108,10 +133,12 @@ def _output_stem(
     pca_components: str | None = None,
     tune_hyperparameters: bool = False,
     tuning_scoring: str = "accuracy",
+    temporal_train_window: TemporalTrainWindow | None = None,
     has_feature_preprocessor_column: bool = False,
     has_pca_components_column: bool = False,
     has_tune_hyperparameters_column: bool = False,
     has_tuning_scoring_column: bool = False,
+    has_temporal_train_window_column: bool = False,
 ) -> str:
     parts = [subject]
     if variant is not None:
@@ -129,6 +156,8 @@ def _output_stem(
         parts.append("tuned" if tune_hyperparameters else "untuned")
     if has_tuning_scoring_column and tune_hyperparameters:
         parts.append(_safe_name(tuning_scoring))
+    if has_temporal_train_window_column and temporal_train_window is not None:
+        parts.append(_safe_window_name(temporal_train_window))
     return "_".join(parts)
 
 
@@ -187,6 +216,7 @@ def run_benchmark_manifest(
     default_tuning_cv_splits: int = 3,
     default_tuning_scoring: str = "accuracy",
     default_tuning_c_grid: str | None = None,
+    default_temporal_train_window: TemporalTrainWindow | None = None,
     calibration_dir: Path | None = None,
     calibration_bins: int = 10,
     observation_dir: Path | None = None,
@@ -226,6 +256,7 @@ def run_benchmark_manifest(
             _string_value(row, "tuning_scoring", default_tuning_scoring) or default_tuning_scoring
         )
         tuning_c_grid = _string_value(row, "tuning_c_grid", default_tuning_c_grid)
+        temporal_train_window = _temporal_train_window_value(row, default_temporal_train_window)
         output_stem = _output_stem(
             subject,
             decoder,
@@ -237,10 +268,16 @@ def run_benchmark_manifest(
             pca_components=pca_components,
             tune_hyperparameters=tune_hyperparameters,
             tuning_scoring=tuning_scoring,
+            temporal_train_window=temporal_train_window,
             has_feature_preprocessor_column="feature_preprocessor" in manifest.columns,
             has_pca_components_column="pca_components" in manifest.columns,
             has_tune_hyperparameters_column="tune_hyperparameters" in manifest.columns,
             has_tuning_scoring_column="tuning_scoring" in manifest.columns,
+            has_temporal_train_window_column=bool(
+                {"temporal_train_window", "temporal_train_window_start", "temporal_train_window_stop"}.intersection(
+                    manifest.columns
+                )
+            ),
         )
 
         output_csv = _resolve_path(_string_value(row, "out_csv"), manifest_dir)
@@ -289,6 +326,7 @@ def run_benchmark_manifest(
             tuning_cv_splits=tuning_cv_splits,
             tuning_scoring=tuning_scoring,
             tuning_c_grid=tuning_c_grid,
+            temporal_train_window=temporal_train_window,
             calibration_out_path=calibration_out_csv,
             calibration_bins=_int_value(row, "calibration_bins", calibration_bins),
             observation_out_path=observation_out_csv,
@@ -361,6 +399,7 @@ def main() -> None:
     parser.add_argument("--tuning-cv-splits", type=int, default=3)
     parser.add_argument("--tuning-scoring", choices=TUNING_SCORING_CHOICES, default="accuracy")
     parser.add_argument("--tuning-c-grid", default=",".join(str(value) for value in parse_c_grid(None)))
+    parser.add_argument("--temporal-train-window", type=float, nargs=2, metavar=("START", "STOP"))
     parser.add_argument("--calibration-dir", type=Path)
     parser.add_argument("--calibration-bins", type=int, default=10)
     parser.add_argument("--observation-dir", type=Path, help="Optional directory for held-out trial/time probability observation CSVs.")
@@ -394,6 +433,7 @@ def main() -> None:
         default_tuning_cv_splits=args.tuning_cv_splits,
         default_tuning_scoring=args.tuning_scoring,
         default_tuning_c_grid=args.tuning_c_grid,
+        default_temporal_train_window=tuple(args.temporal_train_window) if args.temporal_train_window is not None else None,
         calibration_dir=args.calibration_dir,
         calibration_bins=args.calibration_bins,
         observation_dir=args.observation_dir,
