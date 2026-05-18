@@ -85,10 +85,10 @@ def _threshold_matches_observation(
     observation: Mapping[str, object],
     group_columns: Sequence[str],
 ) -> bool:
-    return all(
-        column not in observation or str(observation[column]) == str(threshold_row[column])
-        for column in group_columns
-    )
+    missing = [column for column in group_columns if column not in observation]
+    if missing:
+        raise ValueError(f"Observation row is missing threshold group columns: {missing}")
+    return all(str(observation[column]) == str(threshold_row[column]) for column in group_columns)
 
 
 def _observation_time(observation: Mapping[str, object]) -> float:
