@@ -3,12 +3,16 @@ import pytest
 
 from reptrace.decoding import (
     DECODER_CHOICES,
+    REGISTRY_DECODER_CHOICES,
+    STANDARD_DECODER_CHOICES,
     make_cross_validator,
     make_decoder,
     normalize_decoder_name,
+    normalize_decoder_param,
     normalize_feature_preprocessor,
     normalize_pca_components,
     predict_emission_probabilities,
+    resolve_decoder_param,
     score_to_probabilities,
     time_windows,
 )
@@ -38,11 +42,77 @@ def test_make_decoder_produces_probabilities_for_standard_decoders():
     features = rng.normal(size=(30, 4))
     labels = np.array([0, 1] * 15)
 
-    for decoder in DECODER_CHOICES:
+    for decoder in STANDARD_DECODER_CHOICES:
         model = make_decoder(decoder, max_iter=2000)
         model.fit(features, labels)
         probabilities = model.predict_proba(features[:3])
         assert probabilities.shape == (3, 2)
+
+
+def test_decoder_choices_include_fast_shared_registry_decoders():
+    assert "shrinkage-lda" in DECODER_CHOICES
+    assert "correlation-prototype" in DECODER_CHOICES
+    assert "multinomial-logistic" in DECODER_CHOICES
+    assert "shrinkage-lda" in REGISTRY_DECODER_CHOICES
+    assert normalize_decoder_name("shrinkage_lda") == "shrinkage-lda"
+    assert normalize_decoder_name("mostFrequentDummy") == "mostFrequentDummy"
+
+
+def test_registry_decoder_produces_probabilities():
+    rng = np.random.default_rng(13)
+    features = rng.normal(size=(30, 4))
+    labels = np.array([0, 1] * 15)
+
+    model = make_decoder("shrinkage-lda")
+    model.fit(features, labels)
+    probabilities = predict_emission_probabilities(model, features[:5])
+
+    assert probabilities.shape == (5, 2)
+    assert probabilities.sum(axis=1).round(6).tolist() == [1.0] * 5
+
+
+def test_registry_decoder_supports_score_derived_emissions():
+    features = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [1.0, 0.1, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.1],
+            [0.0, 0.0, 1.0],
+            [0.1, 0.0, 1.0],
+        ]
+    )
+    labels = np.array([0, 0, 1, 1, 2, 2])
+
+    model = make_decoder("correlation-prototype", emission_mode="uncalibrated")
+    model.fit(features, labels)
+    probabilities = predict_emission_probabilities(model, features[:3], emission_mode="uncalibrated")
+
+    assert probabilities.shape == (3, 3)
+    assert probabilities.sum(axis=1).round(6).tolist() == [1.0] * 3
+
+
+def test_calibrated_registry_decoder_can_score_svm_without_native_probabilities():
+    rng = np.random.default_rng(13)
+    features = rng.normal(size=(36, 4))
+    labels = np.array([0, 1] * 18)
+
+    model = make_decoder("multiclass-svm-weighted", decoder_param=0.5, emission_mode="calibrated")
+    model.fit(features, labels)
+    probabilities = predict_emission_probabilities(model, features[:4], emission_mode="calibrated")
+
+    assert probabilities.shape == (4, 2)
+    assert probabilities.sum(axis=1).round(6).tolist() == [1.0] * 4
+
+
+def test_decoder_param_normalization_and_defaults():
+    assert normalize_decoder_param("0.5") == 0.5
+    assert normalize_decoder_param("5") == 5
+    assert normalize_decoder_param("[5, 50]") == [5, 50]
+    assert normalize_decoder_param('{"hidden_dim": 4}') == {"hidden_dim": 4}
+    assert normalize_decoder_param("default") is None
+    assert resolve_decoder_param("multinomial-logistic", None) == 1.0
+    assert resolve_decoder_param("shrinkage-lda", "0.25") == 0.25
 
 
 def test_make_decoder_fits_pca_inside_probability_pipeline():
