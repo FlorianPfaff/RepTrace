@@ -455,6 +455,9 @@ def _annotate_group_threshold(
     frame["threshold_quantile"] = threshold_quantile
     frame["threshold_window_start"] = threshold_window[0]
     frame["threshold_window_stop"] = threshold_window[1]
+    frame["min_consecutive"] = min_consecutive
+    frame["min_duration"] = min_duration if min_duration is not None else np.nan
+    frame["require_stable_prediction"] = require_stable_prediction
     if "is_correct" not in frame.columns and {"true_label", "predicted_label"}.issubset(frame.columns):
         frame["is_correct"] = frame["true_label"].astype(int) == frame["predicted_label"].astype(int)
     return frame
@@ -500,28 +503,75 @@ def annotate_threshold_crossings(
     return pd.concat(frames, ignore_index=True) if frames else observations.copy()
 
 
+def _column_matches_text(observations: pd.DataFrame, column: str, expected: str) -> bool:
+    if column not in observations.columns:
+        return False
+    values = observations[column].dropna().astype(str)
+    return not values.empty and values.eq(str(expected)).all()
+
+
+def _column_matches_numeric(observations: pd.DataFrame, column: str, expected: float | int) -> bool:
+    if column not in observations.columns:
+        return False
+    values = pd.to_numeric(observations[column], errors="coerce")
+    return not values.isna().any() and np.allclose(values.to_numpy(dtype=float), float(expected))
+
+
+def _column_matches_optional_numeric(
+    observations: pd.DataFrame,
+    column: str,
+    expected: float | None,
+) -> bool:
+    if column not in observations.columns:
+        return False
+    values = pd.to_numeric(observations[column], errors="coerce")
+    if expected is None:
+        return bool(values.isna().all())
+    return not values.isna().any() and np.allclose(values.to_numpy(dtype=float), float(expected))
+
+
+def _column_matches_bool(observations: pd.DataFrame, column: str, expected: bool) -> bool:
+    if column not in observations.columns:
+        return False
+    values = observations[column].dropna()
+    if values.empty:
+        return False
+    normalized = values.astype(str).str.strip().str.lower()
+    parsed = normalized.map({"true": True, "false": False, "1": True, "0": False})
+    return not parsed.isna().any() and parsed.eq(bool(expected)).all()
+
+
 def _has_matching_threshold_annotation(
     observations: pd.DataFrame,
     *,
-    threshold_method: str,
+    threshold_window: tuple[float, float],
     threshold_quantile: float,
     score_column: str,
+    threshold_method: str,
+    min_consecutive: int,
+    min_duration: float | None,
+    require_stable_prediction: bool,
 ) -> bool:
     if "score_threshold" not in observations.columns:
         return False
     if "_onset_score" not in observations.columns and "onset_score" not in observations.columns:
         return False
-    checks = {
-        "threshold_method": threshold_method,
-        "score_column": score_column,
-    }
-    for column, expected in checks.items():
-        if column in observations.columns and not observations[column].dropna().astype(str).eq(str(expected)).all():
-            return False
-    if "threshold_quantile" in observations.columns:
-        quantiles = pd.to_numeric(observations["threshold_quantile"], errors="coerce").dropna()
-        if not quantiles.empty and not np.allclose(quantiles.to_numpy(dtype=float), threshold_quantile):
-            return False
+    if not _column_matches_text(observations, "threshold_method", threshold_method):
+        return False
+    if not _column_matches_text(observations, "score_column", score_column):
+        return False
+    if not _column_matches_numeric(observations, "threshold_quantile", threshold_quantile):
+        return False
+    if not _column_matches_numeric(observations, "threshold_window_start", threshold_window[0]):
+        return False
+    if not _column_matches_numeric(observations, "threshold_window_stop", threshold_window[1]):
+        return False
+    if not _column_matches_numeric(observations, "min_consecutive", min_consecutive):
+        return False
+    if not _column_matches_optional_numeric(observations, "min_duration", min_duration):
+        return False
+    if not _column_matches_bool(observations, "require_stable_prediction", require_stable_prediction):
+        return False
     return True
 
 
@@ -538,9 +588,13 @@ def _prepare_thresholded_observations(
 ) -> pd.DataFrame:
     if _has_matching_threshold_annotation(
         observations,
-        threshold_method=threshold_method,
+        threshold_window=threshold_window,
         threshold_quantile=threshold_quantile,
         score_column=score_column,
+        threshold_method=threshold_method,
+        min_consecutive=min_consecutive,
+        min_duration=min_duration,
+        require_stable_prediction=require_stable_prediction,
     ):
         thresholded = _ensure_prediction_columns(observations).copy()
         if "_onset_score" not in thresholded.columns:
