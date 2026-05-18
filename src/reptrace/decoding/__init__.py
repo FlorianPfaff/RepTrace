@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
+from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
@@ -13,6 +15,11 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
 
+from reptrace.decoding.classifiers import (
+    CLASSIFIER_REGISTRY,
+    get_default_classifier_param,
+    train_multiclass_classifier,
+)
 from reptrace.decoding.sampling import (
     CLASS_LIMIT_SELECTION_MODES as CLASS_LIMIT_SELECTION_MODES,
     DEFAULT_CLASS_LIMIT_SEED as DEFAULT_CLASS_LIMIT_SEED,
@@ -22,11 +29,51 @@ from reptrace.decoding.sampling import (
     select_class_limited_indices as select_class_limited_indices,
 )
 
-DECODER_CHOICES = ("logistic", "lda", "linear_svm")
+BUILTIN_DECODER_CHOICES = ("logistic", "lda", "linear_svm")
+REGISTRY_DECODER_CHOICES = tuple(CLASSIFIER_REGISTRY)
+DECODER_CHOICES = (*BUILTIN_DECODER_CHOICES, *REGISTRY_DECODER_CHOICES)
 EMISSION_MODE_CHOICES = ("calibrated", "uncalibrated")
 FEATURE_PREPROCESSOR_CHOICES = ("none", "pca", "pca_whiten")
 TUNING_SCORING_CHOICES = ("accuracy", "balanced_accuracy", "neg_log_loss")
 DEFAULT_TUNING_C_GRID = (0.01, 0.1, 1.0, 10.0, 100.0)
+
+
+class RegisteredClassifierDecoder(ClassifierMixin, BaseEstimator):
+    """Sklearn-compatible adapter for the legacy RepTrace classifier registry."""
+
+    def __init__(
+        self,
+        classifier: str,
+        classifier_param: Any = None,
+        random_state: int | None = 13,
+    ):
+        self.classifier = classifier
+        self.classifier_param = classifier_param
+        self.random_state = random_state
+
+    def fit(self, features: np.ndarray, labels: np.ndarray):
+        classifier = normalize_decoder_name(self.classifier)
+        if classifier not in CLASSIFIER_REGISTRY:
+            raise ValueError(f"'{self.classifier}' is not a registered classifier decoder.")
+        classifier_param = _resolve_registered_classifier_param(classifier, self.classifier_param)
+        self.model_ = train_multiclass_classifier(
+            features,
+            labels,
+            classifier,
+            classifier_param,
+            random_state=self.random_state,
+        )
+        self.classes_ = np.asarray(self.model_.classes_)
+        return self
+
+    def predict(self, features: np.ndarray) -> np.ndarray:
+        return self.model_.predict(features)
+
+    def decision_function(self, features: np.ndarray) -> np.ndarray:
+        return self.model_.decision_function(features)
+
+    def predict_proba(self, features: np.ndarray) -> np.ndarray:
+        return self.model_.predict_proba(features)
 
 
 def make_logistic_decoder(
@@ -98,6 +145,15 @@ def make_decoder(
             *feature_steps,
             LinearDiscriminantAnalysis(solver="svd"),
         )
+    if normalized in CLASSIFIER_REGISTRY:
+        return make_pipeline(
+            StandardScaler(),
+            *feature_steps,
+            RegisteredClassifierDecoder(
+                normalized,
+                random_state=13,
+            ),
+        )
 
     linear_svm = make_pipeline(
         StandardScaler(),
@@ -167,7 +223,7 @@ def make_tuned_decoder(
                 "lineardiscriminantanalysis__shrinkage": ["auto"],
             },
         ]
-    else:
+    elif normalized == "linear_svm":
         if emission_mode == "uncalibrated" and scoring == "neg_log_loss":
             raise ValueError("neg_log_loss tuning requires probability estimates; use calibrated emissions for linear_svm.")
         linear_svm = make_pipeline(
@@ -184,6 +240,10 @@ def make_tuned_decoder(
         else:
             estimator = _make_calibrated_classifier(linear_svm, method="sigmoid", cv=3)
             param_grid = {_calibrated_estimator_param(estimator, "linearsvc__C"): c_grid}
+    else:
+        raise ValueError(
+            "Hyperparameter tuning is currently supported for logistic, lda, and linear_svm decoders only."
+        )
 
     return GridSearchCV(
         estimator=estimator,
@@ -237,12 +297,23 @@ def normalize_tuning_scoring(scoring: str) -> str:
 
 def normalize_decoder_name(name: str) -> str:
     """Normalize decoder aliases to the names used in result tables."""
-    normalized = name.lower().replace("-", "_")
-    if normalized == "svm":
-        return "linear_svm"
-    if normalized not in DECODER_CHOICES:
+    normalized = name.strip().lower().replace("_", "-")
+    aliases = {
+        "svm": "linear_svm",
+        "linear-svc": "linear_svm",
+        "logistic-regression": "logistic",
+        "multinomial-logistic-regression": "multinomial-logistic",
+        "correlation-prototypes": "correlation-prototype",
+        "most-frequent-dummy": "mostFrequentDummy",
+        "always-one-dummy": "always1Dummy",
+        "always-1-dummy": "always1Dummy",
+    }
+    if normalized in aliases:
+        return aliases[normalized]
+    choice_map = {choice.lower().replace("_", "-"): choice for choice in DECODER_CHOICES}
+    if normalized not in choice_map:
         raise ValueError(f"Unknown decoder '{name}'. Available decoders: {', '.join(DECODER_CHOICES)}.")
-    return normalized
+    return choice_map[normalized]
 
 
 def normalize_emission_mode(mode: str) -> str:
@@ -320,6 +391,12 @@ def _feature_preprocessor_steps(feature_preprocessor: str | None, pca_components
     ]
 
 
+def _resolve_registered_classifier_param(classifier: str, classifier_param: Any) -> Any:
+    if classifier_param is None:
+        return get_default_classifier_param(classifier)
+    return classifier_param
+
+
 def score_to_probabilities(scores: np.ndarray) -> np.ndarray:
     """Convert uncalibrated decision scores into pseudo-probability emissions."""
     scores = np.asarray(scores, dtype=float)
@@ -340,7 +417,10 @@ def predict_emission_probabilities(model, features: np.ndarray, *, emission_mode
     if emission_mode == "uncalibrated" and hasattr(model, "decision_function"):
         return score_to_probabilities(model.decision_function(features))
     if hasattr(model, "predict_proba"):
-        return np.asarray(model.predict_proba(features), dtype=float)
+        try:
+            return np.asarray(model.predict_proba(features), dtype=float)
+        except AttributeError:
+            pass
     if hasattr(model, "decision_function"):
         return score_to_probabilities(model.decision_function(features))
     raise ValueError("Decoder does not provide predict_proba or decision_function.")
