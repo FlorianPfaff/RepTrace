@@ -13,8 +13,10 @@ from reptrace.decoding import (
     DECODER_CHOICES,
     EMISSION_MODE_CHOICES,
     FEATURE_PREPROCESSOR_CHOICES,
+    DEFAULT_SVM_CALIBRATION_SPLITS,
     make_cross_validator,
     make_decoder,
+    make_grouped_calibration_cv,
     normalize_decoder_name,
     normalize_emission_mode,
     normalize_feature_preprocessor,
@@ -52,6 +54,28 @@ def _load_epochs_and_metadata(
     return epochs, metadata.reset_index(drop=True)
 
 
+def _model_hash(
+    *,
+    decoder_name: str,
+    emission_mode: str,
+    max_iter: int,
+    feature_preprocessor_name: str,
+    pca_components_value: int | float | None,
+    calibration_cv_name: str = "",
+) -> str:
+    payload = {
+        "backend": "sklearn",
+        "decoder": decoder_name,
+        "emission_mode": emission_mode,
+        "max_iter": max_iter,
+        "feature_preprocessor": feature_preprocessor_name,
+        "pca_components": pca_components_value,
+    }
+    if calibration_cv_name:
+        payload["calibration_cv"] = calibration_cv_name
+    return stable_hash(payload)
+
+
 def run_time_resolved_decode(
     epochs_path: Path,
     label_column: str,
@@ -70,6 +94,7 @@ def run_time_resolved_decode(
     emission_mode: str = "calibrated",
     feature_preprocessor: str = "none",
     pca_components: int | float | str | None = None,
+    calibration_splits: int = DEFAULT_SVM_CALIBRATION_SPLITS,
     calibration_out_path: Path | None = None,
     calibration_bins: int = 10,
     observation_out_path: Path | None = None,
@@ -117,15 +142,12 @@ def run_time_resolved_decode(
             "pca_components": pca_components_value,
         }
     )
-    model_hash = stable_hash(
-        {
-            "backend": "sklearn",
-            "decoder": decoder_name,
-            "emission_mode": emission_mode,
-            "max_iter": max_iter,
-            "feature_preprocessor": feature_preprocessor_name,
-            "pca_components": pca_components_value,
-        }
+    model_hash = _model_hash(
+        decoder_name=decoder_name,
+        emission_mode=emission_mode,
+        max_iter=max_iter,
+        feature_preprocessor_name=feature_preprocessor_name,
+        pca_components_value=pca_components_value,
     )
 
     data = epochs.get_data(copy=False)
@@ -138,12 +160,37 @@ def run_time_resolved_decode(
         features = data[:, :, start:stop].reshape(len(labels), -1)
         for fold, (train_idx, test_idx) in enumerate(make_cross_validator(labels, groups, n_splits)):
             for current_emission_mode in emission_modes:
+                calibration_cv = None
+                calibration_cv_name = ""
+                if decoder_name == "linear_svm" and current_emission_mode == "calibrated":
+                    if groups is None:
+                        if calibration_splits < 2:
+                            raise ValueError("Need at least two calibration splits for calibrated linear SVM decoding.")
+                        calibration_cv = calibration_splits
+                        calibration_cv_name = f"stratified-kfold-{calibration_splits}"
+                    else:
+                        calibration_cv = make_grouped_calibration_cv(
+                            labels[train_idx],
+                            groups[train_idx],
+                            n_splits=calibration_splits,
+                        )
+                        calibration_cv_name = f"stratified-group-kfold-{len(calibration_cv)}"
+
+                current_model_hash = _model_hash(
+                    decoder_name=decoder_name,
+                    emission_mode=current_emission_mode,
+                    max_iter=max_iter,
+                    feature_preprocessor_name=feature_preprocessor_name,
+                    pca_components_value=pca_components_value,
+                    calibration_cv_name=calibration_cv_name,
+                )
                 model = make_decoder(
                     decoder_name,
                     max_iter=max_iter,
                     emission_mode=current_emission_mode,
                     feature_preprocessor=feature_preprocessor_name,
                     pca_components=pca_components_value,
+                    calibration_cv=calibration_cv,
                 )
                 model.fit(features[train_idx], labels[train_idx])
 
@@ -163,6 +210,7 @@ def run_time_resolved_decode(
                             "emission_mode": current_emission_mode,
                             "feature_preprocessor": feature_preprocessor_name,
                             "pca_components": "" if pca_components_value is None else pca_components_value,
+                            "calibration_cv": calibration_cv_name,
                             "time": center,
                             "window_start": float(epochs.times[start]),
                             "window_stop": float(epochs.times[stop - 1]),
@@ -188,6 +236,7 @@ def run_time_resolved_decode(
                                     "emission_mode": current_emission_mode,
                                     "feature_preprocessor": feature_preprocessor_name,
                                     "pca_components": "" if pca_components_value is None else pca_components_value,
+                                    "calibration_cv": calibration_cv_name,
                                     "time": center,
                                     "window_start": float(epochs.times[start]),
                                     "window_stop": float(epochs.times[stop - 1]),
@@ -209,6 +258,7 @@ def run_time_resolved_decode(
                             "emission_mode": current_emission_mode,
                             "feature_preprocessor": feature_preprocessor_name,
                             "pca_components": "" if pca_components_value is None else pca_components_value,
+                            "calibration_cv": calibration_cv_name,
                             "train_time": center,
                             "test_time": center,
                             "time": center,
@@ -226,16 +276,7 @@ def run_time_resolved_decode(
                             "is_correct": bool(predicted_label == true_label),
                             "calibration_fold": "",
                             "preprocessing_hash": preprocessing_hash,
-                            "model_hash": stable_hash(
-                                {
-                                    "backend": "sklearn",
-                                    "decoder": decoder_name,
-                                    "emission_mode": current_emission_mode,
-                                    "max_iter": max_iter,
-                                    "feature_preprocessor": feature_preprocessor_name,
-                                    "pca_components": pca_components_value,
-                                }
-                            ),
+                            "model_hash": current_model_hash,
                         }
                         if group_column is not None:
                             observation["group"] = groups[filtered_index]
@@ -287,6 +328,7 @@ def main() -> None:
         "--pca-components",
         help="PCA component count or explained-variance fraction. Only valid with --feature-preprocessor pca or pca-whiten.",
     )
+    parser.add_argument("--calibration-splits", type=int, default=DEFAULT_SVM_CALIBRATION_SPLITS, help="Inner calibration folds for calibrated linear SVM decoding.")
     parser.add_argument("--calibration-out", type=Path)
     parser.add_argument("--calibration-bins", type=int, default=10)
     parser.add_argument("--observations-out", type=Path, help="Optional held-out trial/time probability observation CSV.")
@@ -310,6 +352,7 @@ def main() -> None:
         emission_mode=args.emission_mode,
         feature_preprocessor=args.feature_preprocessor,
         pca_components=args.pca_components,
+        calibration_splits=args.calibration_splits,
         calibration_out_path=args.calibration_out,
         calibration_bins=args.calibration_bins,
         observation_out_path=args.observations_out,
