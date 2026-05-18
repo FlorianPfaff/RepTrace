@@ -865,7 +865,7 @@ def detect_onsets_from_csvs(
     threshold_summary = summarize_threshold_crossings(
         thresholded_observations,
         baseline_window=threshold_window,
-        detection_window=detection_window,
+        detection_window=event_detection_window,
     )
     if out_events is not None:
         out_events.parent.mkdir(parents=True, exist_ok=True)
