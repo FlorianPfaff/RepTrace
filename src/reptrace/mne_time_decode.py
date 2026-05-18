@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+from collections.abc import Sequence
 from pathlib import Path
 
 import mne
@@ -13,12 +15,16 @@ from reptrace.decoding import (
     DECODER_CHOICES,
     EMISSION_MODE_CHOICES,
     FEATURE_PREPROCESSOR_CHOICES,
+    TUNING_SCORING_CHOICES,
     make_cross_validator,
     make_decoder,
+    make_tuning_cross_validator,
     normalize_decoder_name,
     normalize_emission_mode,
     normalize_feature_preprocessor,
     normalize_pca_components,
+    normalize_tuning_scoring,
+    parse_c_grid,
     predict_emission_probabilities,
     time_windows,
 )
@@ -52,6 +58,49 @@ def _load_epochs_and_metadata(
             f"Metadata row count ({len(metadata)}) does not match epochs ({len(epochs)})."
         )
     return epochs, metadata.reset_index(drop=True)
+
+
+def _best_params_json(models) -> str:
+    if isinstance(models, Sequence) and not isinstance(models, (str, bytes)):
+        best_params = [getattr(model, "best_params_", None) for model in models]
+        best_params = [params for params in best_params if params is not None]
+    else:
+        best_params = getattr(models, "best_params_", None)
+    return "" if not best_params else json.dumps(best_params, sort_keys=True, default=str, separators=(",", ":"))
+
+
+def _best_scores(models) -> list[float]:
+    if isinstance(models, Sequence) and not isinstance(models, (str, bytes)):
+        return [float(model.best_score_) for model in models if hasattr(model, "best_score_")]
+    if hasattr(models, "best_score_"):
+        return [float(models.best_score_)]
+    return []
+
+
+def _tuning_metadata(
+    models,
+    *,
+    tune_hyperparameters: bool,
+    tuning_cv_splits: int,
+    tuning_scoring: str,
+    tuning_c_grid: Sequence[float],
+) -> dict[str, object]:
+    if not tune_hyperparameters:
+        return {}
+    metadata: dict[str, object] = {
+        "tuned_hyperparameters": True,
+        "tuning_cv_splits": int(tuning_cv_splits),
+        "tuning_scoring": tuning_scoring,
+        "tuning_c_grid": "|".join(str(value) for value in tuning_c_grid),
+        "best_params": _best_params_json(models),
+    }
+    scores = _best_scores(models)
+    if len(scores) == 1:
+        metadata["best_score"] = scores[0]
+    elif scores:
+        metadata["best_score"] = float(np.mean(scores))
+        metadata["best_scores"] = json.dumps(scores, separators=(",", ":"))
+    return metadata
 
 
 def _normalize_temporal_train_window(
@@ -123,20 +172,34 @@ def _model_hash(
     temporal_mode: str,
     temporal_train_window: TemporalTrainWindow | None,
     train_window_centers: list[float] | None = None,
+    tune_hyperparameters: bool = False,
+    tuning_cv_splits: int | None = None,
+    tuning_scoring: str | None = None,
+    tuning_c_grid: Sequence[float] | None = None,
+    tuning_metadata: dict[str, object] | None = None,
 ) -> str:
-    return stable_hash(
-        {
-            "backend": "sklearn",
-            "decoder": decoder_name,
-            "emission_mode": emission_mode,
-            "max_iter": max_iter,
-            "feature_preprocessor": feature_preprocessor,
-            "pca_components": pca_components,
-            "temporal_mode": temporal_mode,
-            "temporal_train_window": temporal_train_window,
-            "train_window_centers": train_window_centers,
-        }
-    )
+    payload: dict[str, object] = {
+        "backend": "sklearn",
+        "decoder": decoder_name,
+        "emission_mode": emission_mode,
+        "max_iter": max_iter,
+        "feature_preprocessor": feature_preprocessor,
+        "pca_components": pca_components,
+        "temporal_mode": temporal_mode,
+        "temporal_train_window": temporal_train_window,
+        "train_window_centers": train_window_centers,
+    }
+    if tune_hyperparameters:
+        payload.update(
+            {
+                "tune_hyperparameters": True,
+                "tuning_cv_splits": tuning_cv_splits,
+                "tuning_scoring": tuning_scoring,
+                "tuning_c_grid": tuple(tuning_c_grid or ()),
+                "best_params": (tuning_metadata or {}).get("best_params", ""),
+            }
+        )
+    return stable_hash(payload)
 
 
 def _append_decoded_outputs(
@@ -173,7 +236,9 @@ def _append_decoded_outputs(
     calibration_bins: int,
     observation_out_path: Path | None,
     subject: str | None,
+    tuning_metadata: dict[str, object] | None = None,
 ) -> None:
+    tuning_metadata = {} if tuning_metadata is None else tuning_metadata
     start, stop, center = time_window
     predictions = probabilities.argmax(axis=1)
     row = {
@@ -200,32 +265,30 @@ def _append_decoded_outputs(
         "n_classes": len(classes),
         "class_names": "|".join(map(str, class_names)),
     }
+    row.update(tuning_metadata)
     rows.append(_add_subject(row, subject))
 
     if calibration_out_path is not None:
         for bin_row in reliability_bins(probabilities, test_labels, n_bins=calibration_bins):
-            calibration_rows.append(
-                _add_subject(
-                    {
-                        "fold": fold,
-                        "decoder": decoder_name,
-                        "emission_mode": emission_mode,
-                        "feature_preprocessor": feature_preprocessor_name,
-                        "pca_components": "" if pca_components_value is None else pca_components_value,
-                        "temporal_mode": temporal_mode,
-                        "train_time": train_time,
-                        "time": center,
-                        "test_time": center,
-                        "train_window_start": train_window_start,
-                        "train_window_stop": train_window_stop,
-                        "n_train_windows": n_train_windows,
-                        "window_start": float(epochs.times[start]),
-                        "window_stop": float(epochs.times[stop - 1]),
-                        **bin_row,
-                    },
-                    subject,
-                )
-            )
+            calibration_row = {
+                "fold": fold,
+                "decoder": decoder_name,
+                "emission_mode": emission_mode,
+                "feature_preprocessor": feature_preprocessor_name,
+                "pca_components": "" if pca_components_value is None else pca_components_value,
+                "temporal_mode": temporal_mode,
+                "train_time": train_time,
+                "time": center,
+                "test_time": center,
+                "train_window_start": train_window_start,
+                "train_window_stop": train_window_stop,
+                "n_train_windows": n_train_windows,
+                "window_start": float(epochs.times[start]),
+                "window_stop": float(epochs.times[stop - 1]),
+                **bin_row,
+            }
+            calibration_row.update(tuning_metadata)
+            calibration_rows.append(_add_subject(calibration_row, subject))
     if observation_out_path is not None:
         for local_position, filtered_index in enumerate(test_idx):
             true_label = int(test_labels[local_position])
@@ -264,6 +327,7 @@ def _append_decoded_outputs(
             }
             if group_column is not None:
                 observation["group"] = groups[filtered_index] if groups is not None else ""
+            observation.update(tuning_metadata)
             for class_index, class_name in enumerate(class_names):
                 observation[f"class_{class_index}"] = str(class_name)
                 observation[f"prob_class_{class_index}"] = float(probabilities[local_position, class_index])
@@ -288,6 +352,10 @@ def run_time_resolved_decode(
     emission_mode: str = "calibrated",
     feature_preprocessor: str = "none",
     pca_components: int | float | str | None = None,
+    tune_hyperparameters: bool = False,
+    tuning_cv_splits: int = 3,
+    tuning_scoring: str = "accuracy",
+    tuning_c_grid: Sequence[float] | str | None = None,
     calibration_out_path: Path | None = None,
     calibration_bins: int = 10,
     observation_out_path: Path | None = None,
@@ -310,6 +378,8 @@ def run_time_resolved_decode(
     if feature_preprocessor_name == "none" and pca_components is not None:
         raise ValueError("pca_components can only be set when feature_preprocessor is 'pca' or 'pca_whiten'.")
     pca_components_value = normalize_pca_components(pca_components) if feature_preprocessor_name != "none" else None
+    tuning_scoring = normalize_tuning_scoring(tuning_scoring)
+    tuning_c_grid_values = parse_c_grid(tuning_c_grid)
     normalized_temporal_train_window = _normalize_temporal_train_window(temporal_train_window)
 
     if label_column not in metadata.columns:
@@ -355,6 +425,10 @@ def run_time_resolved_decode(
         pca_components=pca_components_value,
         temporal_mode=temporal_mode,
         temporal_train_window=normalized_temporal_train_window,
+        tune_hyperparameters=tune_hyperparameters,
+        tuning_cv_splits=tuning_cv_splits,
+        tuning_scoring=tuning_scoring,
+        tuning_c_grid=tuning_c_grid_values,
     )
 
     data = epochs.get_data(copy=False)
@@ -373,12 +447,21 @@ def run_time_resolved_decode(
             for fold, (train_idx, test_idx) in enumerate(splits):
                 test_labels = labels[test_idx]
                 for current_emission_mode in emission_modes:
+                    tuning_cv = (
+                        make_tuning_cross_validator(labels[train_idx], None if groups is None else groups[train_idx], tuning_cv_splits)
+                        if tune_hyperparameters
+                        else 3
+                    )
                     model = make_decoder(
                         decoder_name,
                         max_iter=max_iter,
                         emission_mode=current_emission_mode,
                         feature_preprocessor=feature_preprocessor_name,
                         pca_components=pca_components_value,
+                        tune_hyperparameters=tune_hyperparameters,
+                        tuning_cv=tuning_cv,
+                        tuning_scoring=tuning_scoring,
+                        tuning_c_grid=tuning_c_grid_values,
                     )
                     model.fit(features[train_idx], labels[train_idx])
 
@@ -396,6 +479,24 @@ def run_time_resolved_decode(
                         temporal_mode=temporal_mode,
                         temporal_train_window=None,
                         train_window_centers=[center],
+                        tune_hyperparameters=tune_hyperparameters,
+                        tuning_cv_splits=tuning_cv_splits,
+                        tuning_scoring=tuning_scoring,
+                        tuning_c_grid=tuning_c_grid_values,
+                        tuning_metadata=_tuning_metadata(
+                            model,
+                            tune_hyperparameters=tune_hyperparameters,
+                            tuning_cv_splits=tuning_cv_splits,
+                            tuning_scoring=tuning_scoring,
+                            tuning_c_grid=tuning_c_grid_values,
+                        ),
+                    )
+                    tuning_metadata = _tuning_metadata(
+                        model,
+                        tune_hyperparameters=tune_hyperparameters,
+                        tuning_cv_splits=tuning_cv_splits,
+                        tuning_scoring=tuning_scoring,
+                        tuning_c_grid=tuning_c_grid_values,
                     )
                     _append_decoded_outputs(
                         rows=rows,
@@ -430,6 +531,7 @@ def run_time_resolved_decode(
                         calibration_bins=calibration_bins,
                         observation_out_path=observation_out_path,
                         subject=subject,
+                        tuning_metadata=tuning_metadata,
                     )
     else:
         feature_cache = {time_window: _features_for_window(data, time_window) for time_window in windows}
@@ -438,6 +540,12 @@ def run_time_resolved_decode(
         for fold, (train_idx, test_idx) in enumerate(splits):
             test_labels = labels[test_idx]
             for current_emission_mode in emission_modes:
+                tuning_cv = (
+                    make_tuning_cross_validator(labels[train_idx], None if groups is None else groups[train_idx], tuning_cv_splits)
+                    if tune_hyperparameters
+                    else 3
+                )
+                fitted_models = []
                 probability_sums = {
                     time_window: np.zeros((len(test_idx), len(classes)), dtype=float)
                     for time_window in windows
@@ -450,8 +558,13 @@ def run_time_resolved_decode(
                         emission_mode=current_emission_mode,
                         feature_preprocessor=feature_preprocessor_name,
                         pca_components=pca_components_value,
+                        tune_hyperparameters=tune_hyperparameters,
+                        tuning_cv=tuning_cv,
+                        tuning_scoring=tuning_scoring,
+                        tuning_c_grid=tuning_c_grid_values,
                     )
                     model.fit(train_features[train_idx], labels[train_idx])
+                    fitted_models.append(model)
                     for test_window in windows:
                         probability_sums[test_window] += predict_emission_probabilities(
                             model,
@@ -468,6 +581,24 @@ def run_time_resolved_decode(
                     temporal_mode=temporal_mode,
                     temporal_train_window=normalized_temporal_train_window,
                     train_window_centers=train_window_centers,
+                    tune_hyperparameters=tune_hyperparameters,
+                    tuning_cv_splits=tuning_cv_splits,
+                    tuning_scoring=tuning_scoring,
+                    tuning_c_grid=tuning_c_grid_values,
+                    tuning_metadata=_tuning_metadata(
+                        fitted_models,
+                        tune_hyperparameters=tune_hyperparameters,
+                        tuning_cv_splits=tuning_cv_splits,
+                        tuning_scoring=tuning_scoring,
+                        tuning_c_grid=tuning_c_grid_values,
+                    ),
+                )
+                tuning_metadata = _tuning_metadata(
+                    fitted_models,
+                    tune_hyperparameters=tune_hyperparameters,
+                    tuning_cv_splits=tuning_cv_splits,
+                    tuning_scoring=tuning_scoring,
+                    tuning_c_grid=tuning_c_grid_values,
                 )
                 for test_window in windows:
                     probabilities = _probability_average(probability_sums[test_window], len(selected_train_windows))
@@ -504,6 +635,7 @@ def run_time_resolved_decode(
                         calibration_bins=calibration_bins,
                         observation_out_path=observation_out_path,
                         subject=subject,
+                        tuning_metadata=tuning_metadata,
                     )
 
     results = pd.DataFrame(rows)
@@ -549,6 +681,14 @@ def main() -> None:
         "--pca-components",
         help="PCA component count or explained-variance fraction. Only valid with --feature-preprocessor pca or pca-whiten.",
     )
+    parser.add_argument("--tune-hyperparameters", action="store_true", help="Use nested inner-CV hyperparameter selection inside each outer train fold.")
+    parser.add_argument("--tuning-cv-splits", type=int, default=3, help="Maximum number of inner CV folds for --tune-hyperparameters.")
+    parser.add_argument("--tuning-scoring", choices=TUNING_SCORING_CHOICES, default="accuracy", help="Inner-CV objective for --tune-hyperparameters.")
+    parser.add_argument(
+        "--tuning-c-grid",
+        default=",".join(str(value) for value in parse_c_grid(None)),
+        help="Comma-separated positive C values for tuned logistic regression and linear SVM.",
+    )
     parser.add_argument("--calibration-out", type=Path)
     parser.add_argument("--calibration-bins", type=int, default=10)
     parser.add_argument("--observations-out", type=Path, help="Optional held-out trial/time probability observation CSV.")
@@ -582,6 +722,10 @@ def main() -> None:
         emission_mode=args.emission_mode,
         feature_preprocessor=args.feature_preprocessor,
         pca_components=args.pca_components,
+        tune_hyperparameters=args.tune_hyperparameters,
+        tuning_cv_splits=args.tuning_cv_splits,
+        tuning_scoring=args.tuning_scoring,
+        tuning_c_grid=args.tuning_c_grid,
         calibration_out_path=args.calibration_out,
         calibration_bins=args.calibration_bins,
         observation_out_path=args.observations_out,
