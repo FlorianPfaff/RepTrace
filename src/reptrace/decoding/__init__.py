@@ -22,6 +22,7 @@ from reptrace.decoding.sampling import (
 DECODER_CHOICES = ("logistic", "lda", "linear_svm")
 EMISSION_MODE_CHOICES = ("calibrated", "uncalibrated")
 FEATURE_PREPROCESSOR_CHOICES = ("none", "pca", "pca_whiten")
+DEFAULT_SVM_CALIBRATION_SPLITS = 3
 
 
 def make_logistic_decoder(
@@ -46,12 +47,17 @@ def make_decoder(
     emission_mode: str = "calibrated",
     feature_preprocessor: str = "none",
     pca_components: int | float | str | None = None,
+    calibration_cv=None,
 ):
     """Create a standard probability-producing decoder by name.
 
     Optional feature preprocessing is inserted after fold-local standardization
     and before the classifier. This keeps low-rank transforms such as PCA inside
     each cross-validation fold and prevents train/test leakage.
+
+    ``calibration_cv`` is only used for calibrated linear SVMs. Passing explicit
+    split indices lets grouped workflows calibrate the SVM without mixing
+    acquisition/session groups inside the inner calibration folds.
     """
     normalized = normalize_decoder_name(name)
     emission_mode = normalize_emission_mode(emission_mode)
@@ -84,21 +90,24 @@ def make_decoder(
     )
     if emission_mode == "uncalibrated":
         return linear_svm
-    return _make_calibrated_classifier(linear_svm)
+    return _make_calibrated_classifier(
+        linear_svm,
+        cv=DEFAULT_SVM_CALIBRATION_SPLITS if calibration_cv is None else calibration_cv,
+    )
 
 
-def _make_calibrated_classifier(estimator):
+def _make_calibrated_classifier(estimator, *, cv=DEFAULT_SVM_CALIBRATION_SPLITS):
     try:
         return CalibratedClassifierCV(
             estimator=estimator,
             method="sigmoid",
-            cv=3,
+            cv=cv,
         )
     except TypeError:
         return CalibratedClassifierCV(
             base_estimator=estimator,
             method="sigmoid",
-            cv=3,
+            cv=cv,
         )
 
 
@@ -237,6 +246,55 @@ def make_cross_validator(labels: np.ndarray, groups: np.ndarray | None, n_splits
         np.zeros_like(labels),
         labels,
     )
+
+
+def make_grouped_calibration_cv(
+    labels: np.ndarray,
+    groups: np.ndarray,
+    n_splits: int = DEFAULT_SVM_CALIBRATION_SPLITS,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Create inner SVM-calibration folds that keep groups disjoint.
+
+    The returned split indices are relative to the outer training set. They can
+    be passed directly as ``cv`` to ``CalibratedClassifierCV``.
+    """
+    labels = np.asarray(labels)
+    groups = np.asarray(groups)
+    if labels.ndim != 1 or groups.ndim != 1:
+        raise ValueError("labels and groups must be one-dimensional for grouped calibration CV.")
+    if len(labels) != len(groups):
+        raise ValueError("labels and groups must contain the same number of samples for grouped calibration CV.")
+    if n_splits < 2:
+        raise ValueError("Need at least two calibration splits for grouped SVM calibration.")
+
+    classes, class_counts = np.unique(labels, return_counts=True)
+    if len(classes) < 2:
+        raise ValueError("Need at least two classes for grouped SVM calibration.")
+
+    unique_groups = np.unique(groups)
+    n_inner_splits = min(int(n_splits), int(np.min(class_counts)), len(unique_groups))
+    if n_inner_splits < 2:
+        raise ValueError(
+            "Grouped SVM calibration needs at least two groups and two examples per class in the outer training fold."
+        )
+
+    splitter = StratifiedGroupKFold(n_splits=n_inner_splits, shuffle=True, random_state=13)
+    splits = [
+        (np.asarray(inner_train_idx, dtype=int), np.asarray(calibration_idx, dtype=int))
+        for inner_train_idx, calibration_idx in splitter.split(np.zeros(len(labels)), labels, groups)
+    ]
+    expected_classes = set(classes.tolist())
+    for inner_train_idx, calibration_idx in splits:
+        train_groups = set(groups[inner_train_idx].tolist())
+        calibration_groups = set(groups[calibration_idx].tolist())
+        if not train_groups.isdisjoint(calibration_groups):
+            raise RuntimeError("Grouped calibration split leaked a group across inner train and calibration folds.")
+        if set(labels[inner_train_idx].tolist()) != expected_classes or set(labels[calibration_idx].tolist()) != expected_classes:
+            raise ValueError(
+                "Grouped SVM calibration requires every inner training and calibration fold to contain all classes; "
+                "provide more trials/groups or use --emission-mode uncalibrated."
+            )
+    return splits
 
 
 def time_windows(times: np.ndarray, window_ms: float, step_ms: float) -> list[tuple[int, int, float]]:
