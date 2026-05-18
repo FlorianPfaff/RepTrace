@@ -85,15 +85,16 @@ def _tuning_metadata(
     tuning_scoring: str,
     tuning_c_grid: Sequence[float],
 ) -> dict[str, object]:
-    if not tune_hyperparameters:
-        return {}
     metadata: dict[str, object] = {
-        "tuned_hyperparameters": True,
-        "tuning_cv_splits": int(tuning_cv_splits),
-        "tuning_scoring": tuning_scoring,
-        "tuning_c_grid": "|".join(str(value) for value in tuning_c_grid),
-        "best_params": _best_params_json(models),
+        "tuned_hyperparameters": bool(tune_hyperparameters),
+        "tuning_cv_splits": int(tuning_cv_splits) if tune_hyperparameters else "",
+        "tuning_scoring": tuning_scoring if tune_hyperparameters else "",
+        "tuning_c_grid": "|".join(str(value) for value in tuning_c_grid) if tune_hyperparameters else "",
+        "best_params": "",
     }
+    if not tune_hyperparameters:
+        return metadata
+    metadata["best_params"] = _best_params_json(models)
     scores = _best_scores(models)
     if len(scores) == 1:
         metadata["best_score"] = scores[0]

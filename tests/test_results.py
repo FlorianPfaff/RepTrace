@@ -90,6 +90,27 @@ def test_aggregate_time_decode_results_keeps_emission_modes_separate():
     assert aggregated["accuracy_mean"].round(3).tolist() == [0.7, 0.8, 0.8, 0.9]
 
 
+def test_aggregate_time_decode_results_keeps_preprocessing_and_tuning_separate():
+    baseline = _result_frame("s1")
+    baseline["decoder"] = "logistic"
+    baseline["feature_preprocessor"] = "none"
+    baseline["tuned_hyperparameters"] = False
+    tuned = _result_frame("s1", offset=0.1)
+    tuned["decoder"] = "logistic"
+    tuned["feature_preprocessor"] = "pca_whiten"
+    tuned["pca_components"] = "0.95"
+    tuned["tuned_hyperparameters"] = True
+    tuned["tuning_cv_splits"] = 2
+    tuned["tuning_scoring"] = "balanced_accuracy"
+    tuned["tuning_c_grid"] = "0.1|1.0|10.0"
+
+    aggregated = aggregate_time_decode_results(pd.concat([baseline, tuned], ignore_index=True))
+
+    assert aggregated["feature_preprocessor"].tolist() == ["none", "none", "pca_whiten", "pca_whiten"]
+    assert aggregated["tuned_hyperparameters"].tolist() == [False, False, True, True]
+    assert aggregated["accuracy_mean"].round(3).tolist() == [0.7, 0.8, 0.8, 0.9]
+
+
 def test_summarize_metric_table_reports_participants_chance_and_scaled_values():
     frame = pd.DataFrame(
         {
