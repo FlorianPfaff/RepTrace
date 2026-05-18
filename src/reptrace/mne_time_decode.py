@@ -73,8 +73,8 @@ def _fitted_model_hash(
     decoder_name: str,
     emission_mode: str,
     max_iter: int,
-    feature_preprocessor_name: str,
-    pca_components_value: int | float | None,
+    feature_preprocessor: str,
+    pca_components: int | float | None,
     tune_hyperparameters: bool,
     tuning_cv_splits: int,
     tuning_scoring: str,
@@ -86,8 +86,8 @@ def _fitted_model_hash(
         "decoder": decoder_name,
         "emission_mode": emission_mode,
         "max_iter": max_iter,
-        "feature_preprocessor": feature_preprocessor_name,
-        "pca_components": pca_components_value,
+        "feature_preprocessor": feature_preprocessor,
+        "pca_components": pca_components,
     }
     if tune_hyperparameters:
         payload.update(
@@ -215,11 +215,12 @@ def run_time_resolved_decode(
         features = data[:, :, start:stop].reshape(len(labels), -1)
         for fold, (train_idx, test_idx) in enumerate(make_cross_validator(labels, groups, n_splits)):
             for current_emission_mode in emission_modes:
-                tuning_cv = (
-                    make_tuning_cross_validator(labels[train_idx], None if groups is None else groups[train_idx], tuning_cv_splits)
-                    if tune_hyperparameters
-                    else 3
-                )
+                if tune_hyperparameters:
+                    tuning_cv = make_tuning_cross_validator(labels[train_idx], None if groups is None else groups[train_idx], tuning_cv_splits)
+                    actual_tuning_cv_splits = len(tuning_cv)
+                else:
+                    tuning_cv = 3
+                    actual_tuning_cv_splits = 0
                 model = make_decoder(
                     decoder_name,
                     max_iter=max_iter,
@@ -243,7 +244,7 @@ def run_time_resolved_decode(
                 tuning_metadata = _tuning_metadata(
                     model,
                     tune_hyperparameters=tune_hyperparameters,
-                    tuning_cv_splits=tuning_cv_splits,
+                    tuning_cv_splits=actual_tuning_cv_splits,
                     tuning_scoring=tuning_scoring,
                     tuning_c_grid=tuning_c_grid_values,
                 )
@@ -251,10 +252,10 @@ def run_time_resolved_decode(
                     decoder_name=decoder_name,
                     emission_mode=current_emission_mode,
                     max_iter=max_iter,
-                    feature_preprocessor_name=feature_preprocessor_name,
-                    pca_components_value=pca_components_value,
+                    feature_preprocessor=feature_preprocessor_name,
+                    pca_components=pca_components_value,
                     tune_hyperparameters=tune_hyperparameters,
-                    tuning_cv_splits=tuning_cv_splits,
+                    tuning_cv_splits=actual_tuning_cv_splits,
                     tuning_scoring=tuning_scoring,
                     tuning_c_grid=tuning_c_grid_values,
                     tuning_metadata=tuning_metadata,
