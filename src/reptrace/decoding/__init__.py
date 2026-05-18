@@ -9,6 +9,12 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
 
+from reptrace.decoding.preprocessing import (
+    FEATURE_PREPROCESSOR_CHOICES as FEATURE_PREPROCESSOR_CHOICES,
+    feature_preprocessor_steps,
+    normalize_feature_preprocessor as normalize_feature_preprocessor,
+    normalize_pca_components as normalize_pca_components,
+)
 from reptrace.decoding.sampling import (
     CLASS_LIMIT_SELECTION_MODES as CLASS_LIMIT_SELECTION_MODES,
     DEFAULT_CLASS_LIMIT_SEED as DEFAULT_CLASS_LIMIT_SEED,
@@ -22,19 +28,43 @@ DECODER_CHOICES = ("logistic", "lda", "linear_svm")
 EMISSION_MODE_CHOICES = ("calibrated", "uncalibrated")
 
 
-def make_logistic_decoder(max_iter: int = 1000):
+def make_logistic_decoder(
+    max_iter: int = 1000,
+    *,
+    feature_preprocessor: str = "none",
+    pca_components: int | float | str | None = None,
+):
     """Create the default calibrated-probability baseline decoder."""
-    return make_decoder("logistic", max_iter=max_iter)
+    return make_decoder(
+        "logistic",
+        max_iter=max_iter,
+        feature_preprocessor=feature_preprocessor,
+        pca_components=pca_components,
+    )
 
 
-def make_decoder(name: str = "logistic", *, max_iter: int = 1000, emission_mode: str = "calibrated"):
-    """Create a standard probability-producing decoder by name."""
+def make_decoder(
+    name: str = "logistic",
+    *,
+    max_iter: int = 1000,
+    emission_mode: str = "calibrated",
+    feature_preprocessor: str = "none",
+    pca_components: int | float | str | None = None,
+):
+    """Create a standard probability-producing decoder by name.
+
+    Optional feature preprocessing is inserted after fold-local standardization
+    and before the classifier. This keeps low-rank transforms such as PCA inside
+    each cross-validation fold and prevents train/test leakage.
+    """
     normalized = normalize_decoder_name(name)
     emission_mode = normalize_emission_mode(emission_mode)
+    preprocessing_steps = feature_preprocessor_steps(feature_preprocessor, pca_components)
 
     if normalized == "logistic":
         return make_pipeline(
             StandardScaler(),
+            *preprocessing_steps,
             LogisticRegression(
                 class_weight="balanced",
                 max_iter=max_iter,
@@ -44,11 +74,13 @@ def make_decoder(name: str = "logistic", *, max_iter: int = 1000, emission_mode:
     if normalized == "lda":
         return make_pipeline(
             StandardScaler(),
+            *preprocessing_steps,
             LinearDiscriminantAnalysis(solver="svd"),
         )
 
     linear_svm = make_pipeline(
         StandardScaler(),
+        *preprocessing_steps,
         LinearSVC(
             class_weight="balanced",
             max_iter=max_iter,
