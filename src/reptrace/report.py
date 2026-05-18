@@ -21,6 +21,9 @@ SUBJECT_TABLE_LABELS = {
     "temporal_mode": "Temporal mode",
     "temporal_train_window_start": "Temporal train start",
     "temporal_train_window_stop": "Temporal train stop",
+    "temporal_smoothing_method": "Temporal smoothing",
+    "temporal_smoothing_fit_window_start": "Smoothing fit start",
+    "temporal_smoothing_fit_window_stop": "Smoothing fit stop",
 }
 METRIC_HIGHER_IS_BETTER = {
     "accuracy": True,

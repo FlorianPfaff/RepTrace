@@ -195,6 +195,82 @@ def test_run_benchmark_manifest_passes_observation_output_paths(tmp_path: Path, 
     assert pd.read_csv(run.observation_csvs[0])["prob_class_1"].tolist() == [0.7]
 
 
+def test_run_benchmark_manifest_can_compare_temporal_smoothing(tmp_path: Path, monkeypatch):
+    manifest = tmp_path / "manifest.csv"
+    manifest.write_text(
+        "subject,epochs,metadata_csv,label_column,decoder\n"
+        "sub-01,data/sub-01_epo.fif,data/sub-01_metadata.csv,condition,logistic\n",
+        encoding="utf-8",
+    )
+
+    def fake_decode(**kwargs):
+        out_path = kwargs["out_path"]
+        subject = kwargs.get("subject", "sub-01")
+        rows = []
+        observation_rows = []
+        for fold in (0, 1):
+            for time, p0 in ((0.1, 0.9), (0.2, 0.45)):
+                p1 = 1.0 - p0
+                rows.append(
+                    {
+                        "subject": subject,
+                        "fold": fold,
+                        "decoder": kwargs.get("decoder", "logistic"),
+                        "emission_mode": "calibrated",
+                        "time": time,
+                        "accuracy": float(p0 > p1),
+                        "log_loss": 0.5,
+                        "brier": 0.25,
+                        "ece": 0.1,
+                        "n_test": 2,
+                    }
+                )
+                for sequence_id in (0, 1):
+                    observation_rows.append(
+                        {
+                            "subject": subject,
+                            "fold": fold,
+                            "decoder": kwargs.get("decoder", "logistic"),
+                            "emission_mode": "calibrated",
+                            "time": time,
+                            "sample_index": sequence_id,
+                            "sequence_id": sequence_id,
+                            "true_label": 0,
+                            "true_class": "animate",
+                            "predicted_label": 0 if p0 > p1 else 1,
+                            "predicted_class": "animate" if p0 > p1 else "inanimate",
+                            "probability_true_class": p0,
+                            "confidence": max(p0, p1),
+                            "prob_class_0": p0,
+                            "prob_class_1": p1,
+                        }
+                    )
+        frame = pd.DataFrame(rows)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        frame.to_csv(out_path, index=False)
+        observation_out_path = kwargs["observation_out_path"]
+        observation_out_path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(observation_rows).to_csv(observation_out_path, index=False)
+        return frame
+
+    monkeypatch.setattr("reptrace.benchmark.run_time_resolved_decode", fake_decode)
+
+    run = run_benchmark_manifest(
+        manifest,
+        out_dir=tmp_path / "results",
+        temporal_smoothing_dir=tmp_path / "results" / "temporal_smoothing",
+        temporal_smoothing_fit_window=(0.1, 0.2),
+        temporal_smoothing_stay_grid_size=20,
+    )
+
+    assert run.observation_csvs == [tmp_path / "results" / "observations" / "sub-01_logistic_observations.csv"]
+    assert run.smoothed_observation_csv is not None and run.smoothed_observation_csv.exists()
+    assert run.smoothed_metric_csv is not None and run.smoothed_metric_csv.exists()
+    summary = pd.read_csv(run.aggregate_csv)
+    assert sorted(summary["emission_mode"].unique().tolist()) == ["calibrated", "calibrated_temporal_posterior"]
+    assert sorted(summary["temporal_smoothing_method"].unique().tolist()) == ["none", "sticky_forward_backward"]
+
+
 def test_run_benchmark_manifest_supports_emission_mode_column(tmp_path: Path, monkeypatch):
     manifest = tmp_path / "manifest.csv"
     manifest.write_text(

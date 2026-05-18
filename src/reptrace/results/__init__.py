@@ -40,6 +40,9 @@ SUMMARY_GROUP_COLUMNS = (
     "temporal_mode",
     "temporal_train_window_start",
     "temporal_train_window_stop",
+    "temporal_smoothing_method",
+    "temporal_smoothing_fit_window_start",
+    "temporal_smoothing_fit_window_stop",
 )
 WEIGHT_COLUMN = "n_test"
 DEFAULT_ECE_BINS = 10
@@ -54,6 +57,9 @@ GROUP_COLUMN_DEFAULTS = {
     "temporal_mode": "same_time",
     "temporal_train_window_start": "",
     "temporal_train_window_stop": "",
+    "temporal_smoothing_method": "none",
+    "temporal_smoothing_fit_window_start": "",
+    "temporal_smoothing_fit_window_stop": "",
 }
 
 

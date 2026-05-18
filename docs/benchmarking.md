@@ -415,6 +415,29 @@ This manifest combines `--temporal-train-window 0.12 0.25` with
 train-window ensemble is fitted on the outer training split and tunes C with
 inner CV before its probabilities are averaged across train-window centers.
 
+Compare raw decoder probabilities with temporal posterior smoothing without
+changing the decoder:
+
+```bash
+python -m reptrace.benchmark \
+  benchmarks/nod_animate_logistic_temporal_smoothing_all.csv \
+  --out-dir results/nod_animate_logistic_temporal_smoothing_all \
+  --aggregate-out results/nod_animate_logistic_temporal_smoothing_all/summary.csv \
+  --plot-out results/nod_animate_logistic_temporal_smoothing_all/summary.png \
+  --calibration-dir results/nod_animate_logistic_temporal_smoothing_all/calibration \
+  --temporal-smoothing-dir results/nod_animate_logistic_temporal_smoothing_all/temporal_smoothing \
+  --temporal-smoothing-fit-window 0.1 0.8 \
+  --chance 0.5 \
+  --resume
+```
+
+When `--temporal-smoothing-dir` is supplied, the benchmark runner exports the
+held-out probability observations, fits sticky forward-backward smoothing on
+those same observations, writes smoothed posterior metrics, and aggregates raw
+and smoothed rows into the same summary. The comparison appears as
+`emission_mode=calibrated` versus
+`emission_mode=calibrated_temporal_posterior`.
+
 Generate a decoder comparison report:
 
 ```bash
@@ -499,6 +522,22 @@ gh workflow run nod-decoder-all.yml \
   -f data_root=../data/nod \
   -f manifest_csv=benchmarks/nod_animate_logistic_tuned_temporal_ensemble_all.csv \
   -f output_dir=results/nod_animate_logistic_tuned_temporal_ensemble_all \
+  -f n_permutations=10000
+```
+
+Or run the raw-versus-smoothed posterior comparison:
+
+```bash
+gh workflow run nod-decoder-all.yml \
+  --repo IPS-Stuttgart/RepTrace \
+  --ref main \
+  -f data_root=../data/nod \
+  -f manifest_csv=benchmarks/nod_animate_logistic_temporal_smoothing_all.csv \
+  -f output_dir=results/nod_animate_logistic_temporal_smoothing_all \
+  -f temporal_smoothing=true \
+  -f temporal_smoothing_fit_window_start=0.1 \
+  -f temporal_smoothing_fit_window_stop=0.8 \
+  -f temporal_smoothing_stay_grid_size=200 \
   -f n_permutations=10000
 ```
 

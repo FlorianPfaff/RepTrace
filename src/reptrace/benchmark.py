@@ -11,6 +11,7 @@ from reptrace.metadata import prepare_binary_metadata
 from reptrace.mne_time_decode import run_time_resolved_decode
 from reptrace.plot_time_decode import plot_time_decode_results
 from reptrace.results import aggregate_time_decode_csvs
+from reptrace.temporal_smoothing import DEFAULT_EMISSION_SUFFIX, DEFAULT_FIT_WINDOW, smooth_probability_observations
 from reptrace.decoding import (
     DECODER_CHOICES,
     EMISSION_MODE_CHOICES,
@@ -37,6 +38,8 @@ class BenchmarkRun:
     calibration_csvs: list[Path]
     observation_csvs: list[Path]
     skipped_existing: int = 0
+    smoothed_observation_csv: Path | None = None
+    smoothed_metric_csv: Path | None = None
 
 
 def _missing(value: Any) -> bool:
@@ -220,6 +223,10 @@ def run_benchmark_manifest(
     calibration_dir: Path | None = None,
     calibration_bins: int = 10,
     observation_dir: Path | None = None,
+    temporal_smoothing_dir: Path | None = None,
+    temporal_smoothing_fit_window: tuple[float, float] | None = DEFAULT_FIT_WINDOW,
+    temporal_smoothing_stay_grid_size: int = 200,
+    temporal_smoothing_emission_suffix: str = DEFAULT_EMISSION_SUFFIX,
     resume: bool = False,
 ) -> BenchmarkRun:
     """Run a manifest-defined benchmark and optionally aggregate and plot results."""
@@ -229,6 +236,8 @@ def run_benchmark_manifest(
 
     manifest_dir = manifest_csv.parent
     out_dir.mkdir(parents=True, exist_ok=True)
+    if temporal_smoothing_dir is not None and observation_dir is None:
+        observation_dir = out_dir / "observations"
     result_csvs: list[Path] = []
     calibration_csvs: list[Path] = []
     observation_csvs: list[Path] = []
@@ -344,12 +353,34 @@ def run_benchmark_manifest(
         results.to_csv(output_csv, index=False)
         result_csvs.append(output_csv)
 
+    aggregate_result_csvs = list(result_csvs)
+    aggregate_observation_csvs = list(observation_csvs)
+    smoothed_observation_csv: Path | None = None
+    smoothed_metric_csv: Path | None = None
+    if temporal_smoothing_dir is not None:
+        if not observation_csvs:
+            raise ValueError("Temporal smoothing requires probability observations; pass --observation-dir.")
+        smoothed_observation_csv = temporal_smoothing_dir / "smoothed_observations.csv"
+        smoothed_metric_csv = temporal_smoothing_dir / "smoothed_metrics.csv"
+        if not (resume and _usable_file(smoothed_observation_csv) and _usable_file(smoothed_metric_csv)):
+            smooth_probability_observations(
+                observation_csvs,
+                fit_window=temporal_smoothing_fit_window,
+                stay_grid_size=temporal_smoothing_stay_grid_size,
+                emission_suffix=temporal_smoothing_emission_suffix,
+                ece_bins=calibration_bins,
+                out_observations=smoothed_observation_csv,
+                out_metrics=smoothed_metric_csv,
+            )
+        aggregate_result_csvs.append(smoothed_metric_csv)
+        aggregate_observation_csvs.append(smoothed_observation_csv)
+
     if aggregate_out is None:
         aggregate_out = out_dir / "summary.csv"
     aggregate = aggregate_time_decode_csvs(
-        result_csvs,
+        aggregate_result_csvs,
         out_path=aggregate_out,
-        observation_csv_paths=observation_csvs or None,
+        observation_csv_paths=aggregate_observation_csvs or None,
     )
     aggregate_path: Path | None = aggregate_out
 
@@ -370,6 +401,8 @@ def run_benchmark_manifest(
         calibration_csvs=calibration_csvs,
         observation_csvs=observation_csvs,
         skipped_existing=skipped_existing,
+        smoothed_observation_csv=smoothed_observation_csv,
+        smoothed_metric_csv=smoothed_metric_csv,
     )
 
 
@@ -403,6 +436,15 @@ def main() -> None:
     parser.add_argument("--calibration-dir", type=Path)
     parser.add_argument("--calibration-bins", type=int, default=10)
     parser.add_argument("--observation-dir", type=Path, help="Optional directory for held-out trial/time probability observation CSVs.")
+    parser.add_argument("--temporal-smoothing-dir", type=Path, help="Optional directory for smoothed observations and metrics.")
+    parser.add_argument("--temporal-smoothing-fit-window", type=float, nargs=2, default=DEFAULT_FIT_WINDOW, metavar=("START", "STOP"))
+    parser.add_argument(
+        "--temporal-smoothing-full-sequence-fit",
+        action="store_true",
+        help="Fit temporal smoothing on every available time bin instead of --temporal-smoothing-fit-window.",
+    )
+    parser.add_argument("--temporal-smoothing-stay-grid-size", type=int, default=200)
+    parser.add_argument("--temporal-smoothing-emission-suffix", default=DEFAULT_EMISSION_SUFFIX)
     parser.add_argument(
         "--resume",
         action="store_true",
@@ -437,6 +479,12 @@ def main() -> None:
         calibration_dir=args.calibration_dir,
         calibration_bins=args.calibration_bins,
         observation_dir=args.observation_dir,
+        temporal_smoothing_dir=args.temporal_smoothing_dir,
+        temporal_smoothing_fit_window=None
+        if args.temporal_smoothing_full_sequence_fit
+        else tuple(args.temporal_smoothing_fit_window),
+        temporal_smoothing_stay_grid_size=args.temporal_smoothing_stay_grid_size,
+        temporal_smoothing_emission_suffix=args.temporal_smoothing_emission_suffix,
         resume=args.resume,
     )
     if run.skipped_existing:
@@ -450,6 +498,10 @@ def main() -> None:
         print(f"Wrote {len(run.calibration_csvs)} calibration bin file(s).")
     if run.observation_csvs:
         print(f"Wrote {len(run.observation_csvs)} probability observation file(s).")
+    if run.smoothed_observation_csv is not None:
+        print(f"Wrote smoothed observations: {run.smoothed_observation_csv}")
+    if run.smoothed_metric_csv is not None:
+        print(f"Wrote smoothed metrics: {run.smoothed_metric_csv}")
 
 
 if __name__ == "__main__":
