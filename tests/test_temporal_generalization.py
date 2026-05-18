@@ -5,6 +5,7 @@ from reptrace.decoding.temporal_generalization import (
     TemporalFeatureWindow,
     compute_temporal_generalization_matrix,
     summarize_temporal_generalization_matrix,
+    summarize_train_time_stability,
 )
 
 
@@ -100,3 +101,30 @@ def test_summarize_temporal_generalization_matrix_groups_rows():
             "is_diagonal": False,
         }
     ]
+
+
+def test_summarize_train_time_stability_ranks_cross_time_performance():
+    rows = compute_temporal_generalization_matrix(
+        [
+            _window(0.0, [-2.0, -1.0, 1.0, 2.0], [0, 0, 1, 1]),
+            _window(0.1, [-2.0, -1.0, 1.0, 2.0], [0, 0, 1, 1]),
+        ],
+        [
+            _window(0.0, [-1.5, 1.5], [0, 1]),
+            _window(0.1, [-1.5, 1.5], [1, 0]),
+        ],
+        fit_model=lambda window: window,
+        predict_labels=lambda model, window: np.asarray(model.labels[: len(window.labels)]),
+        chance_accuracy=0.5,
+        metadata={"decoder": "toy"},
+    )
+
+    summary = summarize_train_time_stability(rows, group_columns=("decoder",))
+
+    assert summary["decoder"].tolist() == ["toy", "toy"]
+    assert summary["train_window_center_s"].tolist() == [0.0, 0.1]
+    assert summary["n_test_windows"].tolist() == [2, 2]
+    assert summary["accuracy_mean"].tolist() == [0.5, 0.5]
+    assert summary["accuracy_diagonal_mean"].tolist() == [1.0, 0.0]
+    assert summary["accuracy_off_diagonal_mean"].tolist() == [0.0, 1.0]
+    assert summary["stability_rank"].tolist() == [1, 1]
