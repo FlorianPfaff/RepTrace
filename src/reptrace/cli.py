@@ -19,6 +19,7 @@ COMMAND_MODULES = {
     "onset-detection": "reptrace.onset_detection",
     "plot-time-decode": "reptrace.plot_time_decode",
     "results": "reptrace.results",
+    "stage-things-eeg2": "reptrace.stage_things_eeg2_preprocessed",
     "stimulus-detect": "reptrace.stimulus_detection",
     "stimulus-detection": "reptrace.stimulus_detection",
     "temporal-model": "reptrace.temporal_model",
