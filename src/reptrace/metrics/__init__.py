@@ -4,6 +4,7 @@ import numpy as np
 
 from reptrace.metrics.confusion import confusion_category_enrichment, confusion_category_matrix, confusion_counts, confusion_pair_summary, per_class_accuracy
 from reptrace.metrics.prepost import compare_prepost_windows, summarize_window_metric
+from reptrace.metrics.ranking import rank_class_scores
 
 __all__ = [
     "brier_score_multiclass",
@@ -14,6 +15,7 @@ __all__ = [
     "confusion_pair_summary",
     "expected_calibration_error",
     "per_class_accuracy",
+    "rank_class_scores",
     "reliability_bins",
     "summarize_window_metric",
 ]
