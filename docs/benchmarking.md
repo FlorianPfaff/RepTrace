@@ -355,6 +355,8 @@ manifest column or `--decoder` CLI option:
 
 - `logistic`: balanced multinomial logistic regression;
 - `lda`: linear discriminant analysis;
+- `shrinkage_lda`: LDA with LSQR covariance shrinkage estimated inside each
+  training fold;
 - `linear_svm`: calibrated balanced linear support vector machine.
 
 Run the first-five-subject decoder comparison:
@@ -396,6 +398,24 @@ That manifest uses `feature_preprocessor=pca-whiten`, `pca_components=0.95`,
 `tune_hyperparameters=true`, a 2-fold inner CV, balanced-accuracy scoring, and
 the C grid `0.01,0.1,1,10,100`. PCA whitening and C tuning are fitted only on
 the training split for each outer fold.
+
+Run an explicit shrinkage-LDA variant over all 19 staged subjects:
+
+```bash
+python -m reptrace.benchmark \
+  benchmarks/nod_animate_shrinkage_lda_all.csv \
+  --out-dir results/nod_animate_shrinkage_lda_all \
+  --aggregate-out results/nod_animate_shrinkage_lda_all/summary.csv \
+  --plot-out results/nod_animate_shrinkage_lda_all/summary.png \
+  --calibration-dir results/nod_animate_shrinkage_lda_all/calibration \
+  --chance 0.5 \
+  --resume
+```
+
+`shrinkage_lda` uses `LinearDiscriminantAnalysis(solver="lsqr",
+shrinkage="auto")`. This is still fitted independently in each outer training
+fold, but it regularizes covariance estimates that can be unstable in short
+high-dimensional MEG windows.
 
 Run the slower tuned temporal train-window ensemble:
 
@@ -522,6 +542,18 @@ gh workflow run nod-decoder-all.yml \
   -f data_root=../data/nod \
   -f manifest_csv=benchmarks/nod_animate_logistic_tuned_temporal_ensemble_all.csv \
   -f output_dir=results/nod_animate_logistic_tuned_temporal_ensemble_all \
+  -f n_permutations=10000
+```
+
+Or run the shrinkage-LDA manifest:
+
+```bash
+gh workflow run nod-decoder-all.yml \
+  --repo IPS-Stuttgart/RepTrace \
+  --ref main \
+  -f data_root=../data/nod \
+  -f manifest_csv=benchmarks/nod_animate_shrinkage_lda_all.csv \
+  -f output_dir=results/nod_animate_shrinkage_lda_all \
   -f n_permutations=10000
 ```
 
