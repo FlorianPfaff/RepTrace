@@ -173,7 +173,17 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/src
         run: |
           if /I "${{ inputs.temporal_smoothing }}"=="true" (
-            py -${{ inputs.python_version }} -m poetry run python -m reptrace.benchmark "%REPTRACE_RUN_MANIFEST%" --out-dir "%REPTRACE_OUTPUT_DIR%" --aggregate-out "%REPTRACE_OUTPUT_DIR%\summary.csv" --plot-out "%REPTRACE_OUTPUT_DIR%\summary.png" --calibration-dir "%REPTRACE_OUTPUT_DIR%\calibration" --observation-dir "%REPTRACE_OUTPUT_DIR%\observations" --temporal-smoothing-dir "%REPTRACE_OUTPUT_DIR%\temporal_smoothing" --temporal-smoothing-fit-window "${{ inputs.temporal_smoothing_fit_window_start }}" "${{ inputs.temporal_smoothing_fit_window_stop }}" --temporal-smoothing-stay-grid-size "${{ inputs.temporal_smoothing_stay_grid_size }}" --chance 0.5 --resume
+            py -${{ inputs.python_version }} -m poetry run python -m reptrace.benchmark "%REPTRACE_RUN_MANIFEST%" ^
+              --out-dir "%REPTRACE_OUTPUT_DIR%" ^
+              --aggregate-out "%REPTRACE_OUTPUT_DIR%\summary.csv" ^
+              --plot-out "%REPTRACE_OUTPUT_DIR%\summary.png" ^
+              --calibration-dir "%REPTRACE_OUTPUT_DIR%\calibration" ^
+              --observation-dir "%REPTRACE_OUTPUT_DIR%\observations" ^
+              --temporal-smoothing-dir "%REPTRACE_OUTPUT_DIR%\temporal_smoothing" ^
+              --temporal-smoothing-fit-window "${{ inputs.temporal_smoothing_fit_window_start }}" "${{ inputs.temporal_smoothing_fit_window_stop }}" ^
+              --temporal-smoothing-stay-grid-size "${{ inputs.temporal_smoothing_stay_grid_size }}" ^
+              --chance 0.5 ^
+              --resume
           ) else (
             py -${{ inputs.python_version }} -m poetry run python -m reptrace.benchmark "%REPTRACE_RUN_MANIFEST%" --out-dir "%REPTRACE_OUTPUT_DIR%" --aggregate-out "%REPTRACE_OUTPUT_DIR%\summary.csv" --plot-out "%REPTRACE_OUTPUT_DIR%\summary.png" --calibration-dir "%REPTRACE_OUTPUT_DIR%\calibration" --chance 0.5 --resume
           )
