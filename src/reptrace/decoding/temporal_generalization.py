@@ -139,6 +139,100 @@ def summarize_temporal_generalization_matrix(
     return pd.DataFrame(rows)
 
 
+def summarize_train_time_stability(
+    frame: pd.DataFrame,
+    *,
+    group_columns: Sequence[str] = (),
+    train_time_column: str = "train_window_center_s",
+    test_time_column: str = "test_window_center_s",
+    score_column: str = "accuracy",
+    chance_column: str | None = "chance_accuracy",
+    diagonal_column: str = "is_diagonal",
+) -> pd.DataFrame:
+    """Rank train-time windows by cross-time generalization stability.
+
+    The input is a temporal-generalization matrix in long form. Each output row
+    corresponds to one train-time window within the requested grouping columns.
+    The primary stability score is the mean held-out score over all tested times
+    and folds, so high ranks identify train-time regions that generalize beyond a
+    single diagonal time bin.
+    """
+
+    if frame.empty:
+        return pd.DataFrame()
+    required_columns = set(group_columns) | {train_time_column, score_column}
+    missing_columns = required_columns.difference(frame.columns)
+    if missing_columns:
+        missing = ", ".join(sorted(missing_columns))
+        raise ValueError(f"Missing required columns: {missing}.")
+
+    grouped = frame.groupby([*group_columns, train_time_column], sort=True, dropna=False)
+    rows: list[dict[str, object]] = []
+    for keys, group in grouped:
+        key_values = keys if isinstance(keys, tuple) else (keys,)
+        row: dict[str, object] = dict(zip([*group_columns, train_time_column], key_values, strict=True))
+
+        values = pd.to_numeric(group[score_column], errors="coerce").dropna().to_numpy(dtype=float)
+        mean_value = float(np.mean(values)) if len(values) else np.nan
+        median_value = float(np.median(values)) if len(values) else np.nan
+        std_value = float(np.std(values, ddof=1)) if len(values) > 1 else 0.0
+        sem_value = float(std_value / np.sqrt(len(values))) if len(values) > 1 else 0.0
+
+        row.update(
+            {
+                "n_rows": int(len(group)),
+                "n_test_windows": int(group[test_time_column].nunique(dropna=False))
+                if test_time_column in group.columns
+                else int(len(group)),
+                f"{score_column}_mean": mean_value,
+                f"{score_column}_median": median_value,
+                f"{score_column}_std": std_value,
+                f"{score_column}_sem": sem_value,
+                "percent_mean": 100.0 * mean_value if np.isfinite(mean_value) else np.nan,
+                "percent_median": 100.0 * median_value if np.isfinite(median_value) else np.nan,
+            }
+        )
+
+        if chance_column is not None and chance_column in group.columns:
+            chance_values = pd.to_numeric(group[chance_column], errors="coerce").dropna()
+            chance = float(chance_values.mean()) if not chance_values.empty else np.nan
+            row["chance_accuracy"] = chance
+            row["chance_percent"] = 100.0 * chance if np.isfinite(chance) else np.nan
+            row[f"{score_column}_above_chance_mean"] = (
+                mean_value - chance if np.isfinite(mean_value) and np.isfinite(chance) else np.nan
+            )
+            row["above_chance_count"] = int((values > chance).sum()) if np.isfinite(chance) else 0
+
+        if diagonal_column in group.columns:
+            diagonal_mask = group[diagonal_column].astype(bool).to_numpy()
+            score_values = pd.to_numeric(group[score_column], errors="coerce").to_numpy(dtype=float)
+            diagonal_values = score_values[diagonal_mask]
+            off_diagonal_values = score_values[~diagonal_mask]
+            row[f"{score_column}_diagonal_mean"] = _nanmean_or_nan(diagonal_values)
+            row[f"{score_column}_off_diagonal_mean"] = _nanmean_or_nan(off_diagonal_values)
+            row["n_diagonal_rows"] = int(np.isfinite(diagonal_values).sum())
+            row["n_off_diagonal_rows"] = int(np.isfinite(off_diagonal_values).sum())
+
+        rows.append(row)
+
+    summary = pd.DataFrame(rows)
+    if summary.empty:
+        return summary
+
+    rank_column = f"{score_column}_mean"
+    if group_columns:
+        summary["stability_rank"] = (
+            summary.groupby(list(group_columns), dropna=False)[rank_column]
+            .rank(method="dense", ascending=False)
+            .astype(int)
+        )
+        sort_columns = [*group_columns, "stability_rank", train_time_column]
+    else:
+        summary["stability_rank"] = summary[rank_column].rank(method="dense", ascending=False).astype(int)
+        sort_columns = ["stability_rank", train_time_column]
+    return summary.sort_values(sort_columns, kind="mergesort").reset_index(drop=True)
+
+
 def _validate_window_labels(window: TemporalFeatureWindow, *, role: str) -> None:
     labels = np.asarray(window.labels)
     if labels.ndim != 1:
@@ -166,3 +260,8 @@ def _window_metadata(prefix: str, window: TemporalFeatureWindow) -> dict[str, ob
         f"{prefix}_window_stop_s": float(window.stop) if window.stop is not None else np.nan,
         **metadata,
     }
+
+
+def _nanmean_or_nan(values: np.ndarray) -> float:
+    finite = values[np.isfinite(values)]
+    return float(np.mean(finite)) if len(finite) else np.nan
