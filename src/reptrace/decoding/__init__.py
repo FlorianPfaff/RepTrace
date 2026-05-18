@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import ast
+import json
+from typing import Any
+
 import numpy as np
+from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
@@ -10,6 +15,11 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
 
+from reptrace.decoding.classifiers import (
+    CLASSIFIER_REGISTRY,
+    get_default_classifier_param,
+    train_multiclass_classifier,
+)
 from reptrace.decoding.sampling import (
     CLASS_LIMIT_SELECTION_MODES as CLASS_LIMIT_SELECTION_MODES,
     DEFAULT_CLASS_LIMIT_SEED as DEFAULT_CLASS_LIMIT_SEED,
@@ -19,9 +29,72 @@ from reptrace.decoding.sampling import (
     select_class_limited_indices as select_class_limited_indices,
 )
 
-DECODER_CHOICES = ("logistic", "lda", "linear_svm")
+STANDARD_DECODER_CHOICES = ("logistic", "lda", "linear_svm")
+REGISTRY_DECODER_CHOICES = tuple(sorted(CLASSIFIER_REGISTRY))
+DECODER_CHOICES = (*STANDARD_DECODER_CHOICES, *REGISTRY_DECODER_CHOICES)
 EMISSION_MODE_CHOICES = ("calibrated", "uncalibrated")
 FEATURE_PREPROCESSOR_CHOICES = ("none", "pca", "pca_whiten")
+_CALIBRATED_REGISTRY_DECODERS = (
+    "correlation-prototype",
+    "multiclass-svm",
+    "multiclass-svm-weighted",
+)
+
+
+class RegistryClassifier(ClassifierMixin, BaseEstimator):
+    """Sklearn-compatible adapter around the shared classifier registry."""
+
+    def __init__(
+        self,
+        classifier: str,
+        classifier_param: Any = None,
+        random_state: int | None = None,
+    ):
+        self.classifier = classifier
+        self.classifier_param = classifier_param
+        self.random_state = random_state
+
+    def fit(self, features, labels):
+        normalized = normalize_decoder_name(self.classifier)
+        if normalized not in REGISTRY_DECODER_CHOICES:
+            raise ValueError(f"RegistryClassifier only supports registry decoders, got '{self.classifier}'.")
+        classifier_param = resolve_decoder_param(normalized, self.classifier_param)
+        self.model_ = train_multiclass_classifier(
+            features,
+            labels,
+            normalized,
+            classifier_param,
+            random_state=self.random_state,
+        )
+        self.classes_ = np.asarray(self.model_.classes_)
+        return self
+
+    def predict(self, features):
+        return self.model_.predict(features)
+
+    def predict_proba(self, features):
+        if not hasattr(self.model_, "predict_proba"):
+            raise AttributeError(f"{self.model_.__class__.__name__!r} object has no attribute 'predict_proba'")
+        return np.asarray(self.model_.predict_proba(features), dtype=float)
+
+    def decision_function(self, features):
+        if hasattr(self.model_, "decision_function"):
+            scores = np.asarray(self.model_.decision_function(features), dtype=float)
+            if scores.ndim == 2 and scores.shape[1] == 2:
+                return scores[:, 1]
+            return scores
+        if hasattr(self.model_, "predict_proba"):
+            probabilities = np.asarray(self.model_.predict_proba(features), dtype=float)
+            if probabilities.ndim == 2 and probabilities.shape[1] == 2:
+                return probabilities[:, 1]
+            return probabilities
+        predictions = np.asarray(self.model_.predict(features), dtype=int)
+        scores = np.zeros((predictions.shape[0], self.classes_.shape[0]), dtype=float)
+        for row_index, encoded_label in enumerate(predictions):
+            class_positions = np.where(self.classes_ == encoded_label)[0]
+            if class_positions.size:
+                scores[row_index, int(class_positions[0])] = 1.0
+        return scores
 
 
 def make_logistic_decoder(
@@ -46,6 +119,8 @@ def make_decoder(
     emission_mode: str = "calibrated",
     feature_preprocessor: str = "none",
     pca_components: int | float | str | None = None,
+    decoder_param: Any = None,
+    random_state: int | None = 13,
 ):
     """Create a standard probability-producing decoder by name.
 
@@ -65,6 +140,7 @@ def make_decoder(
                 class_weight="balanced",
                 max_iter=max_iter,
                 solver="lbfgs",
+                random_state=random_state,
             ),
         )
     if normalized == "lda":
@@ -74,12 +150,27 @@ def make_decoder(
             LinearDiscriminantAnalysis(solver="svd"),
         )
 
+    if normalized in REGISTRY_DECODER_CHOICES:
+        registry_decoder = make_pipeline(
+            StandardScaler(),
+            *feature_steps,
+            RegistryClassifier(
+                normalized,
+                classifier_param=decoder_param,
+                random_state=random_state,
+            ),
+        )
+        if emission_mode == "calibrated" and normalized in _CALIBRATED_REGISTRY_DECODERS:
+            return _make_calibrated_classifier(registry_decoder)
+        return registry_decoder
+
     linear_svm = make_pipeline(
         StandardScaler(),
         *feature_steps,
         LinearSVC(
             class_weight="balanced",
             max_iter=max_iter,
+            random_state=random_state,
         ),
     )
     if emission_mode == "uncalibrated":
@@ -107,9 +198,42 @@ def normalize_decoder_name(name: str) -> str:
     normalized = name.lower().replace("-", "_")
     if normalized == "svm":
         return "linear_svm"
-    if normalized not in DECODER_CHOICES:
-        raise ValueError(f"Unknown decoder '{name}'. Available decoders: {', '.join(DECODER_CHOICES)}.")
-    return normalized
+    if normalized in STANDARD_DECODER_CHOICES:
+        return normalized
+    for registry_name in REGISTRY_DECODER_CHOICES:
+        if normalized == registry_name.lower().replace("-", "_"):
+            return registry_name
+    raise ValueError(f"Unknown decoder '{name}'. Available decoders: {', '.join(DECODER_CHOICES)}.")
+
+
+def normalize_decoder_param(value: Any) -> Any:
+    """Parse optional decoder/classifier parameters from CLI or manifest values."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped == "" or stripped.lower() in {"none", "default"}:
+            return None
+        if stripped.lower() == "null":
+            return None
+        try:
+            return json.loads(stripped)
+        except json.JSONDecodeError:
+            pass
+        try:
+            return ast.literal_eval(stripped)
+        except (ValueError, SyntaxError):
+            return stripped
+    return value
+
+
+def resolve_decoder_param(decoder: str, value: Any) -> Any:
+    """Return the effective classifier parameter used by a decoder."""
+    normalized = normalize_decoder_name(decoder)
+    parsed = normalize_decoder_param(value)
+    if normalized in REGISTRY_DECODER_CHOICES and parsed is None:
+        return get_default_classifier_param(normalized)
+    return parsed
 
 
 def normalize_emission_mode(mode: str) -> str:
@@ -207,7 +331,10 @@ def predict_emission_probabilities(model, features: np.ndarray, *, emission_mode
     if emission_mode == "uncalibrated" and hasattr(model, "decision_function"):
         return score_to_probabilities(model.decision_function(features))
     if hasattr(model, "predict_proba"):
-        return np.asarray(model.predict_proba(features), dtype=float)
+        try:
+            return np.asarray(model.predict_proba(features), dtype=float)
+        except AttributeError:
+            pass
     if hasattr(model, "decision_function"):
         return score_to_probabilities(model.decision_function(features))
     raise ValueError("Decoder does not provide predict_proba or decision_function.")
