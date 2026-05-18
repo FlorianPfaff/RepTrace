@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
+from typing import Any
 
 import mne
 import numpy as np
@@ -20,6 +22,7 @@ from reptrace.decoding import (
     normalize_feature_preprocessor,
     normalize_pca_components,
     predict_emission_probabilities,
+    resolve_decoder_param,
     time_windows,
 )
 from reptrace.metrics import brier_score_multiclass, expected_calibration_error, reliability_bins
@@ -33,6 +36,14 @@ def _add_subject(row: dict, subject: str | None) -> dict:
     if subject is not None:
         row = {"subject": subject, **row}
     return row
+
+
+def _csv_value(value: Any) -> Any:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, sort_keys=True, default=str)
+    return value
 
 
 def _load_epochs_and_metadata(
@@ -67,6 +78,8 @@ def run_time_resolved_decode(
     n_splits: int = 5,
     max_iter: int = 1000,
     decoder: str = "logistic",
+    decoder_param: Any = None,
+    random_state: int | None = 13,
     emission_mode: str = "calibrated",
     feature_preprocessor: str = "none",
     pca_components: int | float | str | None = None,
@@ -78,6 +91,8 @@ def run_time_resolved_decode(
     """Run time-resolved decoding on an MNE epochs file and save metrics as CSV."""
     epochs, metadata = _load_epochs_and_metadata(epochs_path, metadata_csv)
     decoder_name = normalize_decoder_name(decoder)
+    decoder_param_value = resolve_decoder_param(decoder_name, decoder_param)
+    decoder_param_csv = _csv_value(decoder_param_value)
     emission_modes = list(EMISSION_MODE_CHOICES) if emission_mode == "both" else [normalize_emission_mode(emission_mode)]
     feature_preprocessor_name = normalize_feature_preprocessor(feature_preprocessor)
     if feature_preprocessor_name == "none" and pca_components is not None:
@@ -121,8 +136,10 @@ def run_time_resolved_decode(
         {
             "backend": "sklearn",
             "decoder": decoder_name,
+            "decoder_param": decoder_param_value,
             "emission_mode": emission_mode,
             "max_iter": max_iter,
+            "random_state": random_state,
             "feature_preprocessor": feature_preprocessor_name,
             "pca_components": pca_components_value,
         }
@@ -144,6 +161,8 @@ def run_time_resolved_decode(
                     emission_mode=current_emission_mode,
                     feature_preprocessor=feature_preprocessor_name,
                     pca_components=pca_components_value,
+                    decoder_param=decoder_param_value,
+                    random_state=random_state,
                 )
                 model.fit(features[train_idx], labels[train_idx])
 
@@ -160,9 +179,11 @@ def run_time_resolved_decode(
                         {
                             "fold": fold,
                             "decoder": decoder_name,
+                            "decoder_param": decoder_param_csv,
                             "emission_mode": current_emission_mode,
                             "feature_preprocessor": feature_preprocessor_name,
                             "pca_components": "" if pca_components_value is None else pca_components_value,
+                            "random_state": "" if random_state is None else random_state,
                             "time": center,
                             "window_start": float(epochs.times[start]),
                             "window_stop": float(epochs.times[stop - 1]),
@@ -185,9 +206,11 @@ def run_time_resolved_decode(
                                 {
                                     "fold": fold,
                                     "decoder": decoder_name,
+                                    "decoder_param": decoder_param_csv,
                                     "emission_mode": current_emission_mode,
                                     "feature_preprocessor": feature_preprocessor_name,
                                     "pca_components": "" if pca_components_value is None else pca_components_value,
+                                    "random_state": "" if random_state is None else random_state,
                                     "time": center,
                                     "window_start": float(epochs.times[start]),
                                     "window_stop": float(epochs.times[stop - 1]),
@@ -203,8 +226,9 @@ def run_time_resolved_decode(
                         observation = {
                             "fold": fold,
                             "split_id": split_id,
-                            "seed": 13,
+                            "seed": 13 if random_state is None else random_state,
                             "decoder": decoder_name,
+                            "decoder_param": decoder_param_csv,
                             "backend": "sklearn",
                             "emission_mode": current_emission_mode,
                             "feature_preprocessor": feature_preprocessor_name,
@@ -230,8 +254,10 @@ def run_time_resolved_decode(
                                 {
                                     "backend": "sklearn",
                                     "decoder": decoder_name,
+                                    "decoder_param": decoder_param_value,
                                     "emission_mode": current_emission_mode,
                                     "max_iter": max_iter,
+                                    "random_state": random_state,
                                     "feature_preprocessor": feature_preprocessor_name,
                                     "pca_components": pca_components_value,
                                 }
@@ -255,7 +281,7 @@ def run_time_resolved_decode(
             defaults={
                 "backend": "sklearn",
                 "split_id": split_id,
-                "seed": 13,
+                "seed": 13 if random_state is None else random_state,
                 "calibration_fold": "",
                 "preprocessing_hash": preprocessing_hash,
                 "model_hash": model_hash,
@@ -281,6 +307,8 @@ def main() -> None:
     parser.add_argument("--n-splits", type=int, default=5)
     parser.add_argument("--max-iter", type=int, default=1000)
     parser.add_argument("--decoder", choices=DECODER_CHOICES, default="logistic")
+    parser.add_argument("--decoder-param", help="Optional decoder/classifier parameter as JSON or a Python literal.")
+    parser.add_argument("--random-state", type=int, default=13)
     parser.add_argument("--emission-mode", choices=EMISSION_RUN_CHOICES, default="calibrated")
     parser.add_argument("--feature-preprocessor", choices=FEATURE_PREPROCESSOR_RUN_CHOICES, default="none")
     parser.add_argument(
@@ -307,6 +335,8 @@ def main() -> None:
         n_splits=args.n_splits,
         max_iter=args.max_iter,
         decoder=args.decoder,
+        decoder_param=args.decoder_param,
+        random_state=args.random_state,
         emission_mode=args.emission_mode,
         feature_preprocessor=args.feature_preprocessor,
         pca_components=args.pca_components,
