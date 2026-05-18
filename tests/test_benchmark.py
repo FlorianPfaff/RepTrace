@@ -11,6 +11,8 @@ def _fake_decode(**kwargs):
     temporal_mode = "train_window_ensemble" if temporal_train_window is not None else "same_time"
     temporal_train_start = "" if temporal_train_window is None else temporal_train_window[0]
     temporal_train_stop = "" if temporal_train_window is None else temporal_train_window[1]
+    tuned = kwargs.get("tune_hyperparameters", False)
+    best_params = '{"logisticregression__C":1.0}' if tuned else ""
     frame = pd.DataFrame(
         {
             "fold": [0, 1],
@@ -18,10 +20,12 @@ def _fake_decode(**kwargs):
             "emission_mode": [kwargs.get("emission_mode", "calibrated"), kwargs.get("emission_mode", "calibrated")],
             "feature_preprocessor": [kwargs.get("feature_preprocessor", "none"), kwargs.get("feature_preprocessor", "none")],
             "pca_components": ["" if kwargs.get("pca_components") is None else kwargs.get("pca_components")] * 2,
-            "tuned_hyperparameters": [kwargs.get("tune_hyperparameters", False)] * 2,
-            "tuning_cv_splits": [kwargs.get("tuning_cv_splits", "") if kwargs.get("tune_hyperparameters", False) else ""] * 2,
-            "tuning_scoring": [kwargs.get("tuning_scoring", "") if kwargs.get("tune_hyperparameters", False) else ""] * 2,
-            "tuning_c_grid": [kwargs.get("tuning_c_grid", "") if kwargs.get("tune_hyperparameters", False) else ""] * 2,
+            "tuned_hyperparameters": [tuned] * 2,
+            "tuning_cv_splits": [kwargs.get("tuning_cv_splits", "") if tuned else ""] * 2,
+            "tuning_scoring": [kwargs.get("tuning_scoring", "") if tuned else ""] * 2,
+            "tuning_c_grid": [kwargs.get("tuning_c_grid", "") if tuned else ""] * 2,
+            "best_params": [best_params] * 2,
+            "best_score": [0.71 if tuned else ""] * 2,
             "temporal_mode": [temporal_mode, temporal_mode],
             "temporal_train_window_start": [temporal_train_start, temporal_train_start],
             "temporal_train_window_stop": [temporal_train_stop, temporal_train_stop],
@@ -45,10 +49,12 @@ def _fake_decode(**kwargs):
                 "emission_mode": [kwargs.get("emission_mode", "calibrated")],
                 "feature_preprocessor": [kwargs.get("feature_preprocessor", "none")],
                 "pca_components": ["" if kwargs.get("pca_components") is None else kwargs.get("pca_components")],
-                "tuned_hyperparameters": [kwargs.get("tune_hyperparameters", False)],
-                "tuning_cv_splits": [kwargs.get("tuning_cv_splits", "") if kwargs.get("tune_hyperparameters", False) else ""],
-                "tuning_scoring": [kwargs.get("tuning_scoring", "") if kwargs.get("tune_hyperparameters", False) else ""],
-                "tuning_c_grid": [kwargs.get("tuning_c_grid", "") if kwargs.get("tune_hyperparameters", False) else ""],
+                "tuned_hyperparameters": [tuned],
+                "tuning_cv_splits": [kwargs.get("tuning_cv_splits", "") if tuned else ""],
+                "tuning_scoring": [kwargs.get("tuning_scoring", "") if tuned else ""],
+                "tuning_c_grid": [kwargs.get("tuning_c_grid", "") if tuned else ""],
+                "best_params": [best_params],
+                "best_score": [0.71 if tuned else ""],
                 "temporal_mode": [temporal_mode],
                 "temporal_train_window_start": [temporal_train_start],
                 "temporal_train_window_stop": [temporal_train_stop],
@@ -90,6 +96,8 @@ def test_run_benchmark_manifest_runs_subjects_and_aggregates(tmp_path: Path, mon
     assert [path.name for path in run.result_csvs] == ["sub-01_time_decode.csv", "sub-02_time_decode.csv"]
     assert run.aggregate_csv == tmp_path / "results" / "summary.csv"
     assert run.aggregate_csv.exists()
+    assert run.provenance_csv == tmp_path / "results" / "provenance.csv"
+    assert run.provenance_csv.exists()
     assert pd.read_csv(run.result_csvs[0])["subject"].tolist() == ["sub-01", "sub-01"]
 
 
@@ -325,6 +333,11 @@ def test_run_benchmark_manifest_supports_tuned_pca_whiten_variant(tmp_path: Path
     summary = pd.read_csv(run.aggregate_csv)
     assert summary["feature_preprocessor"].unique().tolist() == ["pca_whiten"]
     assert summary["tuned_hyperparameters"].unique().tolist() == [True]
+    provenance = pd.read_csv(run.provenance_csv)
+    assert provenance["pca_mode"].tolist() == ["pca_whiten"]
+    assert provenance["tuning_c_grid"].tolist() == ["0.1,1,10"]
+    assert provenance["selected_params"].str.contains("logisticregression__C", regex=False).all()
+    assert provenance["selected_accuracy"].round(3).tolist() == [0.7]
 
 
 def test_run_benchmark_manifest_supports_tuned_temporal_train_window(tmp_path: Path, monkeypatch):
