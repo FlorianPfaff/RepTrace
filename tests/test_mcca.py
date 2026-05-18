@@ -43,6 +43,7 @@ def test_class_alignment_matrices_class_mean():
 
     assert alignment.classes.tolist() == [1, 2]
     assert alignment.n_repetitions_per_class is None
+    assert alignment.repetition_selection is None
     assert np.allclose(alignment.aligned_by_subject["a"], [[2.0, 0.0], [0.0, 3.0]])
 
 
@@ -57,7 +58,7 @@ def test_class_alignment_matrix_uses_explicit_class_order():
         class_alignment_matrix(features, labels, classes=np.array([1, 3]), sample_mode="class_mean")
 
 
-def test_class_alignment_matrices_class_repetition():
+def test_class_alignment_matrices_class_repetition_defaults_to_seeded_random():
     features = {
         "a": np.array([[1.0], [2.0], [3.0], [4.0], [5.0], [6.0]]),
         "b": np.array([[11.0], [12.0], [13.0], [14.0], [15.0], [16.0]]),
@@ -65,9 +66,49 @@ def test_class_alignment_matrices_class_repetition():
     labels = {"a": np.array([1, 2, 1, 2, 1, 2]), "b": np.array([1, 2, 1, 2, 1, 2])}
 
     alignment = class_alignment_matrices(features, labels, sample_mode="class_repetition", n_repetitions_per_class=2)
+    repeated = class_alignment_matrices(features, labels, sample_mode="class_repetition", n_repetitions_per_class=2)
 
     assert alignment.n_repetitions_per_class == 2
+    assert alignment.repetition_selection == "random"
+    assert alignment.repetition_seed == 0
+    assert alignment.aligned_by_subject["a"].ravel().tolist() == [3.0, 5.0, 4.0, 6.0]
+    assert repeated.aligned_by_subject["a"].ravel().tolist() == alignment.aligned_by_subject["a"].ravel().tolist()
+
+
+def test_class_alignment_matrices_class_repetition_allows_legacy_first_selection():
+    features = {
+        "a": np.array([[1.0], [2.0], [3.0], [4.0], [5.0], [6.0]]),
+        "b": np.array([[11.0], [12.0], [13.0], [14.0], [15.0], [16.0]]),
+    }
+    labels = {"a": np.array([1, 2, 1, 2, 1, 2]), "b": np.array([1, 2, 1, 2, 1, 2])}
+
+    alignment = class_alignment_matrices(
+        features,
+        labels,
+        sample_mode="class_repetition",
+        n_repetitions_per_class=2,
+        repetition_selection="first",
+    )
+
+    assert alignment.repetition_selection == "first"
     assert alignment.aligned_by_subject["a"].ravel().tolist() == [1.0, 3.0, 2.0, 4.0]
+
+
+def test_target_class_alignment_matrix_reuses_repetition_sampling_options():
+    features = np.array([[1.0], [2.0], [3.0], [4.0], [5.0], [6.0]])
+    labels = np.array([1, 2, 1, 2, 1, 2])
+
+    default_aligned = class_alignment_matrix(features, labels, sample_mode="class_repetition", n_repetitions_per_class=2)
+    first_aligned = class_alignment_matrix(
+        features,
+        labels,
+        sample_mode="class_repetition",
+        n_repetitions_per_class=2,
+        repetition_selection="first",
+    )
+
+    assert default_aligned.ravel().tolist() == [3.0, 5.0, 4.0, 6.0]
+    assert first_aligned.ravel().tolist() == [1.0, 3.0, 2.0, 4.0]
 
 
 def test_fit_class_mcca_rejects_missing_class():

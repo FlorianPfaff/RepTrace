@@ -8,7 +8,7 @@ from collections.abc import Iterable
 import numpy as np
 
 CLASS_LIMIT_SELECTION_MODES = ("first", "random")
-DEFAULT_CLASS_LIMIT_SELECTION = "first"
+DEFAULT_CLASS_LIMIT_SELECTION = "random"
 DEFAULT_CLASS_LIMIT_SEED = 0
 
 
@@ -29,9 +29,11 @@ def select_class_limited_indices(
     max_per_class:
         Maximum number of rows to keep per class. ``None`` keeps every row.
     selection:
-        ``"first"`` keeps the earliest rows in input order. ``"random"`` samples
-        without replacement within each class, then returns the selected indices in
-        ascending input order.
+        ``"random"`` samples without replacement within each class, then returns
+        the selected indices in ascending input order. This is the default to
+        avoid order-dependent caps in result-producing benchmarks. ``"first"``
+        is available for legacy/debug use and keeps the earliest rows in input
+        order.
     seed:
         Base random seed for ``selection="random"``. ``None`` requests a fresh,
         non-deterministic generator.

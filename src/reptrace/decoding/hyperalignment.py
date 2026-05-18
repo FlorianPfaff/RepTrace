@@ -13,6 +13,14 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from reptrace.decoding.sampling import (
+    DEFAULT_CLASS_LIMIT_SEED,
+    DEFAULT_CLASS_LIMIT_SELECTION,
+    normalize_class_limit_seed,
+    normalize_class_limit_selection,
+    select_class_limited_indices,
+)
+
 CLASS_ALIGNMENT_SAMPLE_MODES = ("class_mean", "class_repetition")
 
 
@@ -60,6 +68,8 @@ class ClassAlignment:
     classes: np.ndarray
     sample_mode: str
     n_repetitions_per_class: int | None
+    repetition_selection: str | None = None
+    repetition_seed: int | None = None
 
 
 def fit_hyperalignment(
@@ -158,8 +168,16 @@ def class_alignment_matrices(
     *,
     sample_mode: str = "class_mean",
     n_repetitions_per_class: int | None = None,
+    repetition_selection: str = DEFAULT_CLASS_LIMIT_SELECTION,
+    repetition_seed: int | str | None = DEFAULT_CLASS_LIMIT_SEED,
 ) -> ClassAlignment:
-    """Build row-aligned class anchors for hyperalignment."""
+    """Build row-aligned class anchors for hyperalignment.
+
+    ``class_repetition`` caps are sampled reproducibly by default instead of
+    taking the earliest rows in each class. This avoids run/order confounds in
+    repeated-stimulus experiments while keeping row order aligned across subjects
+    via common within-class repetition offsets.
+    """
 
     _check_subject_keys(features_by_subject, labels_by_subject)
     sample_mode = _normalize_sample_mode(sample_mode)
@@ -173,10 +191,31 @@ def class_alignment_matrices(
     if sample_mode == "class_mean":
         aligned = {sid: _class_mean_matrix(features[sid], labels[sid], classes) for sid in subject_ids}
         repetitions = None
+        normalized_selection = None
+        normalized_seed = None
     else:
         repetitions = _common_repetition_count(labels, classes, requested=n_repetitions_per_class)
-        aligned = {sid: _class_repetition_matrix(features[sid], labels[sid], classes, repetitions) for sid in subject_ids}
-    return ClassAlignment(aligned_by_subject=aligned, classes=classes, sample_mode=sample_mode, n_repetitions_per_class=repetitions)
+        normalized_selection = normalize_class_limit_selection(repetition_selection)
+        normalized_seed = normalize_class_limit_seed(repetition_seed)
+        aligned = {
+            sid: _class_repetition_matrix(
+                features[sid],
+                labels[sid],
+                classes,
+                repetitions,
+                selection=normalized_selection,
+                seed=normalized_seed,
+            )
+            for sid in subject_ids
+        }
+    return ClassAlignment(
+        aligned_by_subject=aligned,
+        classes=classes,
+        sample_mode=sample_mode,
+        n_repetitions_per_class=repetitions,
+        repetition_selection=normalized_selection,
+        repetition_seed=normalized_seed,
+    )
 
 
 def fit_class_hyperalignment(
@@ -185,6 +224,8 @@ def fit_class_hyperalignment(
     *,
     sample_mode: str = "class_mean",
     n_repetitions_per_class: int | None = None,
+    repetition_selection: str = DEFAULT_CLASS_LIMIT_SELECTION,
+    repetition_seed: int | str | None = DEFAULT_CLASS_LIMIT_SEED,
     n_components: int | float = 64,
     n_iterations: int = 10,
     template_tolerance: float = 1e-8,
@@ -194,6 +235,8 @@ def fit_class_hyperalignment(
         labels_by_subject,
         sample_mode=sample_mode,
         n_repetitions_per_class=n_repetitions_per_class,
+        repetition_selection=repetition_selection,
+        repetition_seed=repetition_seed,
     )
     model = fit_hyperalignment(
         alignment.aligned_by_subject,
@@ -238,13 +281,28 @@ def _class_mean_matrix(features: np.ndarray, labels: np.ndarray, classes: np.nda
     return np.vstack([np.mean(features[labels == class_label], axis=0) for class_label in classes])
 
 
-def _class_repetition_matrix(features: np.ndarray, labels: np.ndarray, classes: np.ndarray, repetitions: int) -> np.ndarray:
+def _class_repetition_matrix(
+    features: np.ndarray,
+    labels: np.ndarray,
+    classes: np.ndarray,
+    repetitions: int,
+    *,
+    selection: str = DEFAULT_CLASS_LIMIT_SELECTION,
+    seed: int | str | None = DEFAULT_CLASS_LIMIT_SEED,
+) -> np.ndarray:
     rows = []
-    for class_label in classes:
+    for class_position, class_label in enumerate(classes):
         class_features = features[labels == class_label]
         if class_features.shape[0] < repetitions:
             raise ValueError(f"Class {class_label!r} has only {class_features.shape[0]} repetitions, need {repetitions}.")
-        rows.extend(class_features[:repetitions])
+        selected = select_class_limited_indices(
+            np.zeros(class_features.shape[0], dtype=int),
+            repetitions,
+            selection=selection,
+            seed=seed,
+            seed_context=class_position,
+        )
+        rows.extend(class_features[selected])
     return np.vstack(rows)
 
 
