@@ -227,6 +227,7 @@ jobs:
             ${{ inputs.output_dir }}/validation.csv
             ${{ inputs.output_dir }}/manifest.csv
             ${{ inputs.output_dir }}/summary.csv
+            ${{ inputs.output_dir }}/provenance.csv
             ${{ inputs.output_dir }}/summary.png
             ${{ inputs.output_dir }}/reliability.png
             ${{ inputs.output_dir }}/report.md
