@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+from collections.abc import Sequence
 from pathlib import Path
 
 import mne
@@ -13,12 +15,16 @@ from reptrace.decoding import (
     DECODER_CHOICES,
     EMISSION_MODE_CHOICES,
     FEATURE_PREPROCESSOR_CHOICES,
+    TUNING_SCORING_CHOICES,
     make_cross_validator,
     make_decoder,
+    make_tuning_cross_validator,
     normalize_decoder_name,
     normalize_emission_mode,
     normalize_feature_preprocessor,
     normalize_pca_components,
+    normalize_tuning_scoring,
+    parse_c_grid,
     predict_emission_probabilities,
     time_windows,
 )
@@ -33,6 +39,67 @@ def _add_subject(row: dict, subject: str | None) -> dict:
     if subject is not None:
         row = {"subject": subject, **row}
     return row
+
+
+def _best_params_json(model) -> str:
+    best_params = getattr(model, "best_params_", None)
+    return "" if best_params is None else json.dumps(best_params, sort_keys=True, default=str, separators=(",", ":"))
+
+
+def _tuning_metadata(
+    model,
+    *,
+    tune_hyperparameters: bool,
+    tuning_cv_splits: int,
+    tuning_scoring: str,
+    tuning_c_grid: Sequence[float],
+) -> dict[str, object]:
+    if not tune_hyperparameters:
+        return {}
+    metadata: dict[str, object] = {
+        "tuned_hyperparameters": True,
+        "tuning_cv_splits": int(tuning_cv_splits),
+        "tuning_scoring": tuning_scoring,
+        "tuning_c_grid": "|".join(str(value) for value in tuning_c_grid),
+        "best_params": _best_params_json(model),
+    }
+    if hasattr(model, "best_score_"):
+        metadata["best_score"] = float(model.best_score_)
+    return metadata
+
+
+def _fitted_model_hash(
+    *,
+    decoder_name: str,
+    emission_mode: str,
+    max_iter: int,
+    feature_preprocessor_name: str,
+    pca_components_value: int | float | None,
+    tune_hyperparameters: bool,
+    tuning_cv_splits: int,
+    tuning_scoring: str,
+    tuning_c_grid: Sequence[float],
+    tuning_metadata: dict[str, object],
+) -> str:
+    payload: dict[str, object] = {
+        "backend": "sklearn",
+        "decoder": decoder_name,
+        "emission_mode": emission_mode,
+        "max_iter": max_iter,
+        "feature_preprocessor": feature_preprocessor_name,
+        "pca_components": pca_components_value,
+    }
+    if tune_hyperparameters:
+        payload.update(
+            {
+                "tune_hyperparameters": True,
+                "tuning_cv_splits": int(tuning_cv_splits),
+                "tuning_scoring": tuning_scoring,
+                "tuning_c_grid": tuple(tuning_c_grid),
+                "best_params": tuning_metadata.get("best_params", ""),
+            }
+        )
+    return stable_hash(payload)
 
 
 def _load_epochs_and_metadata(
@@ -70,6 +137,10 @@ def run_time_resolved_decode(
     emission_mode: str = "calibrated",
     feature_preprocessor: str = "none",
     pca_components: int | float | str | None = None,
+    tune_hyperparameters: bool = False,
+    tuning_cv_splits: int = 3,
+    tuning_scoring: str = "accuracy",
+    tuning_c_grid: Sequence[float] | str | None = None,
     calibration_out_path: Path | None = None,
     calibration_bins: int = 10,
     observation_out_path: Path | None = None,
@@ -83,6 +154,8 @@ def run_time_resolved_decode(
     if feature_preprocessor_name == "none" and pca_components is not None:
         raise ValueError("pca_components can only be set when feature_preprocessor is 'pca' or 'pca_whiten'.")
     pca_components_value = normalize_pca_components(pca_components) if feature_preprocessor_name != "none" else None
+    tuning_scoring = normalize_tuning_scoring(tuning_scoring)
+    tuning_c_grid_values = parse_c_grid(tuning_c_grid)
 
     if label_column not in metadata.columns:
         raise ValueError(f"Label column '{label_column}' not found in metadata.")
@@ -125,6 +198,10 @@ def run_time_resolved_decode(
             "max_iter": max_iter,
             "feature_preprocessor": feature_preprocessor_name,
             "pca_components": pca_components_value,
+            "tune_hyperparameters": tune_hyperparameters,
+            "tuning_cv_splits": tuning_cv_splits if tune_hyperparameters else "",
+            "tuning_scoring": tuning_scoring if tune_hyperparameters else "",
+            "tuning_c_grid": tuple(tuning_c_grid_values) if tune_hyperparameters else "",
         }
     )
 
@@ -138,12 +215,21 @@ def run_time_resolved_decode(
         features = data[:, :, start:stop].reshape(len(labels), -1)
         for fold, (train_idx, test_idx) in enumerate(make_cross_validator(labels, groups, n_splits)):
             for current_emission_mode in emission_modes:
+                tuning_cv = (
+                    make_tuning_cross_validator(labels[train_idx], None if groups is None else groups[train_idx], tuning_cv_splits)
+                    if tune_hyperparameters
+                    else 3
+                )
                 model = make_decoder(
                     decoder_name,
                     max_iter=max_iter,
                     emission_mode=current_emission_mode,
                     feature_preprocessor=feature_preprocessor_name,
                     pca_components=pca_components_value,
+                    tune_hyperparameters=tune_hyperparameters,
+                    tuning_cv=tuning_cv,
+                    tuning_scoring=tuning_scoring,
+                    tuning_c_grid=tuning_c_grid_values,
                 )
                 model.fit(features[train_idx], labels[train_idx])
 
@@ -154,10 +240,49 @@ def run_time_resolved_decode(
                 )
                 predictions = probabilities.argmax(axis=1)
                 test_labels = labels[test_idx]
+                tuning_metadata = _tuning_metadata(
+                    model,
+                    tune_hyperparameters=tune_hyperparameters,
+                    tuning_cv_splits=tuning_cv_splits,
+                    tuning_scoring=tuning_scoring,
+                    tuning_c_grid=tuning_c_grid_values,
+                )
+                current_model_hash = _fitted_model_hash(
+                    decoder_name=decoder_name,
+                    emission_mode=current_emission_mode,
+                    max_iter=max_iter,
+                    feature_preprocessor_name=feature_preprocessor_name,
+                    pca_components_value=pca_components_value,
+                    tune_hyperparameters=tune_hyperparameters,
+                    tuning_cv_splits=tuning_cv_splits,
+                    tuning_scoring=tuning_scoring,
+                    tuning_c_grid=tuning_c_grid_values,
+                    tuning_metadata=tuning_metadata,
+                )
 
-                rows.append(
-                    _add_subject(
-                        {
+                row = {
+                    "fold": fold,
+                    "decoder": decoder_name,
+                    "emission_mode": current_emission_mode,
+                    "feature_preprocessor": feature_preprocessor_name,
+                    "pca_components": "" if pca_components_value is None else pca_components_value,
+                    "time": center,
+                    "window_start": float(epochs.times[start]),
+                    "window_stop": float(epochs.times[stop - 1]),
+                    "accuracy": accuracy_score(test_labels, predictions),
+                    "log_loss": log_loss(test_labels, probabilities, labels=classes),
+                    "brier": brier_score_multiclass(probabilities, test_labels),
+                    "ece": expected_calibration_error(probabilities, test_labels),
+                    "n_train": len(train_idx),
+                    "n_test": len(test_idx),
+                    "n_classes": len(classes),
+                    "class_names": "|".join(map(str, encoder.classes_)),
+                }
+                row.update(tuning_metadata)
+                rows.append(_add_subject(row, subject))
+                if calibration_out_path is not None:
+                    for bin_row in reliability_bins(probabilities, test_labels, n_bins=calibration_bins):
+                        calibration_row = {
                             "fold": fold,
                             "decoder": decoder_name,
                             "emission_mode": current_emission_mode,
@@ -166,36 +291,10 @@ def run_time_resolved_decode(
                             "time": center,
                             "window_start": float(epochs.times[start]),
                             "window_stop": float(epochs.times[stop - 1]),
-                            "accuracy": accuracy_score(test_labels, predictions),
-                            "log_loss": log_loss(test_labels, probabilities, labels=classes),
-                            "brier": brier_score_multiclass(probabilities, test_labels),
-                            "ece": expected_calibration_error(probabilities, test_labels),
-                            "n_train": len(train_idx),
-                            "n_test": len(test_idx),
-                            "n_classes": len(classes),
-                            "class_names": "|".join(map(str, encoder.classes_)),
-                        },
-                        subject,
-                    )
-                )
-                if calibration_out_path is not None:
-                    for bin_row in reliability_bins(probabilities, test_labels, n_bins=calibration_bins):
-                        calibration_rows.append(
-                            _add_subject(
-                                {
-                                    "fold": fold,
-                                    "decoder": decoder_name,
-                                    "emission_mode": current_emission_mode,
-                                    "feature_preprocessor": feature_preprocessor_name,
-                                    "pca_components": "" if pca_components_value is None else pca_components_value,
-                                    "time": center,
-                                    "window_start": float(epochs.times[start]),
-                                    "window_stop": float(epochs.times[stop - 1]),
-                                    **bin_row,
-                                },
-                                subject,
-                            )
-                        )
+                            **bin_row,
+                        }
+                        calibration_row.update(tuning_metadata)
+                        calibration_rows.append(_add_subject(calibration_row, subject))
                 if observation_out_path is not None:
                     for local_position, filtered_index in enumerate(test_idx):
                         true_label = int(test_labels[local_position])
@@ -226,19 +325,11 @@ def run_time_resolved_decode(
                             "is_correct": bool(predicted_label == true_label),
                             "calibration_fold": "",
                             "preprocessing_hash": preprocessing_hash,
-                            "model_hash": stable_hash(
-                                {
-                                    "backend": "sklearn",
-                                    "decoder": decoder_name,
-                                    "emission_mode": current_emission_mode,
-                                    "max_iter": max_iter,
-                                    "feature_preprocessor": feature_preprocessor_name,
-                                    "pca_components": pca_components_value,
-                                }
-                            ),
+                            "model_hash": current_model_hash,
                         }
                         if group_column is not None:
                             observation["group"] = groups[filtered_index]
+                        observation.update(tuning_metadata)
                         for class_index, class_name in enumerate(encoder.classes_):
                             observation[f"class_{class_index}"] = str(class_name)
                             observation[f"prob_class_{class_index}"] = float(probabilities[local_position, class_index])
@@ -287,6 +378,14 @@ def main() -> None:
         "--pca-components",
         help="PCA component count or explained-variance fraction. Only valid with --feature-preprocessor pca or pca-whiten.",
     )
+    parser.add_argument("--tune-hyperparameters", action="store_true", help="Use nested inner-CV hyperparameter selection inside each outer train fold.")
+    parser.add_argument("--tuning-cv-splits", type=int, default=3, help="Maximum number of inner CV folds for --tune-hyperparameters.")
+    parser.add_argument("--tuning-scoring", choices=TUNING_SCORING_CHOICES, default="accuracy", help="Inner-CV objective for --tune-hyperparameters.")
+    parser.add_argument(
+        "--tuning-c-grid",
+        default=",".join(str(value) for value in parse_c_grid(None)),
+        help="Comma-separated positive C values for tuned logistic regression and linear SVM.",
+    )
     parser.add_argument("--calibration-out", type=Path)
     parser.add_argument("--calibration-bins", type=int, default=10)
     parser.add_argument("--observations-out", type=Path, help="Optional held-out trial/time probability observation CSV.")
@@ -310,6 +409,10 @@ def main() -> None:
         emission_mode=args.emission_mode,
         feature_preprocessor=args.feature_preprocessor,
         pca_components=args.pca_components,
+        tune_hyperparameters=args.tune_hyperparameters,
+        tuning_cv_splits=args.tuning_cv_splits,
+        tuning_scoring=args.tuning_scoring,
+        tuning_c_grid=args.tuning_c_grid,
         calibration_out_path=args.calibration_out,
         calibration_bins=args.calibration_bins,
         observation_out_path=args.observations_out,
