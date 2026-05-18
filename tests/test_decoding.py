@@ -5,9 +5,11 @@ from reptrace.decoding import (
     DECODER_CHOICES,
     make_cross_validator,
     make_decoder,
+    make_tuning_cross_validator,
     normalize_decoder_name,
     normalize_feature_preprocessor,
     normalize_pca_components,
+    parse_c_grid,
     predict_emission_probabilities,
     score_to_probabilities,
     time_windows,
@@ -27,6 +29,17 @@ def test_make_cross_validator_supports_grouped_splits():
     groups = np.array([0, 0, 0, 0, 1, 1, 1, 1])
 
     splits = list(make_cross_validator(labels, groups, n_splits=2))
+
+    assert len(splits) == 2
+    for train_idx, test_idx in splits:
+        assert set(groups[train_idx]).isdisjoint(set(groups[test_idx]))
+
+
+def test_make_tuning_cross_validator_caps_to_feasible_grouped_splits():
+    labels = np.array([0, 0, 1, 1, 0, 0, 1, 1])
+    groups = np.array([0, 0, 0, 0, 1, 1, 1, 1])
+
+    splits = make_tuning_cross_validator(labels, groups, n_splits=5)
 
     assert len(splits) == 2
     for train_idx, test_idx in splits:
@@ -82,6 +95,61 @@ def test_make_decoder_accepts_pca_whiten_alias_and_fractional_components():
 def test_pca_components_are_only_allowed_with_pca_preprocessing():
     with pytest.raises(ValueError, match="pca_components"):
         make_decoder("logistic", feature_preprocessor="none", pca_components=3)
+
+
+def test_make_decoder_can_tune_regularization_with_inner_cv():
+    rng = np.random.default_rng(13)
+    features = rng.normal(size=(24, 4))
+    labels = np.array([0, 1] * 12)
+
+    model = make_decoder(
+        "logistic",
+        max_iter=2000,
+        tune_hyperparameters=True,
+        tuning_cv=2,
+        tuning_c_grid=(0.1, 1.0),
+    )
+    model.fit(features, labels)
+    probabilities = model.predict_proba(features[:3])
+
+    assert probabilities.shape == (3, 2)
+    assert model.best_params_["logisticregression__C"] in {0.1, 1.0}
+
+
+def test_tuned_lda_compares_svd_and_shrinkage_variants():
+    rng = np.random.default_rng(13)
+    features = rng.normal(size=(24, 4))
+    labels = np.array([0, 1] * 12)
+
+    model = make_decoder("lda", tune_hyperparameters=True, tuning_cv=2)
+    model.fit(features, labels)
+
+    assert "lineardiscriminantanalysis__solver" in model.best_params_
+    assert model.predict_proba(features[:3]).shape == (3, 2)
+
+
+def test_tuned_decoder_can_combine_pca_and_regularization_search():
+    rng = np.random.default_rng(13)
+    features = rng.normal(size=(30, 8))
+    labels = np.array([0, 1] * 15)
+
+    model = make_decoder(
+        "logistic",
+        max_iter=2000,
+        feature_preprocessor="pca",
+        pca_components=3,
+        tune_hyperparameters=True,
+        tuning_cv=2,
+        tuning_c_grid=(0.1, 1.0),
+    )
+    model.fit(features, labels)
+
+    assert model.best_estimator_.named_steps["pca"].n_components == 3
+    assert model.best_params_["logisticregression__C"] in {0.1, 1.0}
+
+
+def test_parse_c_grid_accepts_comma_separated_values():
+    assert parse_c_grid("0.1,1,10") == (0.1, 1.0, 10.0)
 
 
 def test_normalize_feature_preprocessor_and_components():
