@@ -5,9 +5,12 @@ from reptrace.decoding import (
     DECODER_CHOICES,
     make_cross_validator,
     make_decoder,
+    normalize_calibration_method,
     normalize_decoder_name,
     normalize_feature_preprocessor,
+    normalize_lda_shrinkage,
     normalize_pca_components,
+    normalize_regularization_c,
     predict_emission_probabilities,
     score_to_probabilities,
     time_windows,
@@ -43,6 +46,25 @@ def test_make_decoder_produces_probabilities_for_standard_decoders():
         model.fit(features, labels)
         probabilities = model.predict_proba(features[:3])
         assert probabilities.shape == (3, 2)
+
+
+def test_make_decoder_exposes_regularization_and_shrinkage_hyperparameters():
+    rng = np.random.default_rng(13)
+    features = rng.normal(size=(40, 6))
+    labels = np.array([0, 1] * 20)
+
+    logistic = make_decoder("logistic", max_iter=2000, regularization_c=0.1)
+    logistic.fit(features, labels)
+    assert logistic.named_steps["logisticregression"].C == 0.1
+
+    svm = make_decoder("linear_svm", max_iter=2000, emission_mode="uncalibrated", regularization_c="10")
+    svm.fit(features, labels)
+    assert svm.named_steps["linearsvc"].C == 10.0
+
+    lda = make_decoder("lda", lda_shrinkage="auto")
+    lda.fit(features, labels)
+    assert lda.named_steps["lineardiscriminantanalysis"].solver == "lsqr"
+    assert lda.named_steps["lineardiscriminantanalysis"].shrinkage == "auto"
 
 
 def test_make_decoder_fits_pca_inside_probability_pipeline():
@@ -90,6 +112,18 @@ def test_normalize_feature_preprocessor_and_components():
     assert normalize_pca_components("3") == 3
     assert normalize_pca_components("0.95") == 0.95
     assert normalize_pca_components("auto") is None
+
+
+def test_normalize_model_selection_hyperparameters():
+    assert normalize_regularization_c("0.1") == 0.1
+    assert normalize_lda_shrinkage("none") is None
+    assert normalize_lda_shrinkage("auto") == "auto"
+    assert normalize_lda_shrinkage("0.5") == 0.5
+    assert normalize_calibration_method("sigmoid") == "sigmoid"
+    with pytest.raises(ValueError, match="regularization_c"):
+        normalize_regularization_c(0)
+    with pytest.raises(ValueError, match="lda_shrinkage"):
+        normalize_lda_shrinkage("2")
 
 
 def test_uncalibrated_linear_svm_uses_score_derived_emissions():
