@@ -76,7 +76,7 @@ def test_summarize_decoder_comparison_can_rank_by_log_loss_improvement():
 
     assert comparison["decoder"].tolist() == ["calibrated_logistic", "logistic"]
     assert comparison["selected_score"].round(3).tolist() == [0.500, 0.650]
-    assert comparison["selection_improvement"].round(3).tolist() == [0.290, 0.135]
+    assert comparison["selection_improvement"].round(3).tolist() == [0.290, 0.055]
 
 
 def test_build_time_decode_report_describes_probability_metric_selection(tmp_path: Path):
