@@ -12,10 +12,13 @@ from sklearn.preprocessing import LabelEncoder
 from reptrace.decoding import (
     DECODER_CHOICES,
     EMISSION_MODE_CHOICES,
+    FEATURE_PREPROCESSOR_CHOICES,
     make_cross_validator,
     make_decoder,
     normalize_decoder_name,
     normalize_emission_mode,
+    normalize_feature_preprocessor,
+    normalize_pca_components,
     predict_emission_probabilities,
     time_windows,
 )
@@ -23,6 +26,7 @@ from reptrace.metrics import brier_score_multiclass, expected_calibration_error,
 from reptrace.observations import ProbabilityObservationTable, stable_hash
 
 EMISSION_RUN_CHOICES = (*EMISSION_MODE_CHOICES, "both")
+FEATURE_PREPROCESSOR_RUN_CHOICES = (*FEATURE_PREPROCESSOR_CHOICES, "pca-whiten")
 
 
 def _add_subject(row: dict, subject: str | None) -> dict:
@@ -64,6 +68,8 @@ def run_time_resolved_decode(
     max_iter: int = 1000,
     decoder: str = "logistic",
     emission_mode: str = "calibrated",
+    feature_preprocessor: str = "none",
+    pca_components: int | float | str | None = None,
     calibration_out_path: Path | None = None,
     calibration_bins: int = 10,
     observation_out_path: Path | None = None,
@@ -73,6 +79,10 @@ def run_time_resolved_decode(
     epochs, metadata = _load_epochs_and_metadata(epochs_path, metadata_csv)
     decoder_name = normalize_decoder_name(decoder)
     emission_modes = list(EMISSION_MODE_CHOICES) if emission_mode == "both" else [normalize_emission_mode(emission_mode)]
+    feature_preprocessor_name = normalize_feature_preprocessor(feature_preprocessor)
+    if feature_preprocessor_name == "none" and pca_components is not None:
+        raise ValueError("pca_components can only be set when feature_preprocessor is 'pca' or 'pca_whiten'.")
+    pca_components_value = normalize_pca_components(pca_components) if feature_preprocessor_name != "none" else None
 
     if label_column not in metadata.columns:
         raise ValueError(f"Label column '{label_column}' not found in metadata.")
@@ -103,9 +113,20 @@ def run_time_resolved_decode(
             "tmax": tmax,
             "window_ms": window_ms,
             "step_ms": step_ms,
+            "feature_preprocessor": feature_preprocessor_name,
+            "pca_components": pca_components_value,
         }
     )
-    model_hash = stable_hash({"backend": "sklearn", "decoder": decoder_name, "emission_mode": emission_mode, "max_iter": max_iter})
+    model_hash = stable_hash(
+        {
+            "backend": "sklearn",
+            "decoder": decoder_name,
+            "emission_mode": emission_mode,
+            "max_iter": max_iter,
+            "feature_preprocessor": feature_preprocessor_name,
+            "pca_components": pca_components_value,
+        }
+    )
 
     data = epochs.get_data(copy=False)
     classes = np.arange(len(encoder.classes_))
@@ -117,7 +138,13 @@ def run_time_resolved_decode(
         features = data[:, :, start:stop].reshape(len(labels), -1)
         for fold, (train_idx, test_idx) in enumerate(make_cross_validator(labels, groups, n_splits)):
             for current_emission_mode in emission_modes:
-                model = make_decoder(decoder_name, max_iter=max_iter, emission_mode=current_emission_mode)
+                model = make_decoder(
+                    decoder_name,
+                    max_iter=max_iter,
+                    emission_mode=current_emission_mode,
+                    feature_preprocessor=feature_preprocessor_name,
+                    pca_components=pca_components_value,
+                )
                 model.fit(features[train_idx], labels[train_idx])
 
                 probabilities = predict_emission_probabilities(
@@ -134,6 +161,8 @@ def run_time_resolved_decode(
                             "fold": fold,
                             "decoder": decoder_name,
                             "emission_mode": current_emission_mode,
+                            "feature_preprocessor": feature_preprocessor_name,
+                            "pca_components": "" if pca_components_value is None else pca_components_value,
                             "time": center,
                             "window_start": float(epochs.times[start]),
                             "window_stop": float(epochs.times[stop - 1]),
@@ -157,6 +186,8 @@ def run_time_resolved_decode(
                                     "fold": fold,
                                     "decoder": decoder_name,
                                     "emission_mode": current_emission_mode,
+                                    "feature_preprocessor": feature_preprocessor_name,
+                                    "pca_components": "" if pca_components_value is None else pca_components_value,
                                     "time": center,
                                     "window_start": float(epochs.times[start]),
                                     "window_stop": float(epochs.times[stop - 1]),
@@ -176,6 +207,8 @@ def run_time_resolved_decode(
                             "decoder": decoder_name,
                             "backend": "sklearn",
                             "emission_mode": current_emission_mode,
+                            "feature_preprocessor": feature_preprocessor_name,
+                            "pca_components": "" if pca_components_value is None else pca_components_value,
                             "train_time": center,
                             "test_time": center,
                             "time": center,
@@ -193,7 +226,16 @@ def run_time_resolved_decode(
                             "is_correct": bool(predicted_label == true_label),
                             "calibration_fold": "",
                             "preprocessing_hash": preprocessing_hash,
-                            "model_hash": stable_hash({"backend": "sklearn", "decoder": decoder_name, "emission_mode": current_emission_mode, "max_iter": max_iter}),
+                            "model_hash": stable_hash(
+                                {
+                                    "backend": "sklearn",
+                                    "decoder": decoder_name,
+                                    "emission_mode": current_emission_mode,
+                                    "max_iter": max_iter,
+                                    "feature_preprocessor": feature_preprocessor_name,
+                                    "pca_components": pca_components_value,
+                                }
+                            ),
                         }
                         if group_column is not None:
                             observation["group"] = groups[filtered_index]
@@ -240,6 +282,11 @@ def main() -> None:
     parser.add_argument("--max-iter", type=int, default=1000)
     parser.add_argument("--decoder", choices=DECODER_CHOICES, default="logistic")
     parser.add_argument("--emission-mode", choices=EMISSION_RUN_CHOICES, default="calibrated")
+    parser.add_argument("--feature-preprocessor", choices=FEATURE_PREPROCESSOR_RUN_CHOICES, default="none")
+    parser.add_argument(
+        "--pca-components",
+        help="PCA component count or explained-variance fraction. Only valid with --feature-preprocessor pca or pca-whiten.",
+    )
     parser.add_argument("--calibration-out", type=Path)
     parser.add_argument("--calibration-bins", type=int, default=10)
     parser.add_argument("--observations-out", type=Path, help="Optional held-out trial/time probability observation CSV.")
@@ -261,6 +308,8 @@ def main() -> None:
         max_iter=args.max_iter,
         decoder=args.decoder,
         emission_mode=args.emission_mode,
+        feature_preprocessor=args.feature_preprocessor,
+        pca_components=args.pca_components,
         calibration_out_path=args.calibration_out,
         calibration_bins=args.calibration_bins,
         observation_out_path=args.observations_out,
