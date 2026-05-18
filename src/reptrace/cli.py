@@ -10,10 +10,12 @@ from importlib import import_module
 COMMAND_MODULES = {
     "benchmark": "reptrace.benchmark",
     "continuous-stimulus-scan": "reptrace.continuous_stimulus_scan",
+    "ensemble-observations": "reptrace.observation_ensemble",
     "event-detect": "reptrace.event_detection",
     "event-detection": "reptrace.event_detection",
     "metadata": "reptrace.metadata",
     "mne-time-decode": "reptrace.mne_time_decode",
+    "observation-ensemble": "reptrace.observation_ensemble",
     "observation-schema": "reptrace.observation_schema",
     "onset-detect": "reptrace.onset_detection",
     "onset-detection": "reptrace.onset_detection",
