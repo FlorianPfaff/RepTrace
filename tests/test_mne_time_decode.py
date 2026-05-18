@@ -86,6 +86,40 @@ def test_run_time_resolved_decode_writes_probability_observations(tmp_path: Path
     assert observations[["prob_class_0", "prob_class_1"]].sum(axis=1).round(6).tolist() == [1.0] * 32
 
 
+def test_run_time_resolved_decode_accepts_registered_classifier(tmp_path: Path, monkeypatch):
+    rng = np.random.default_rng(17)
+    labels = np.array(["animate", "inanimate"] * 4)
+    data = rng.normal(size=(8, 1, 5))
+    data[labels == "animate", 0, :] += 0.5
+    metadata = pd.DataFrame({"condition": labels})
+    epochs = FakeEpochs(data, np.array([0.00, 0.01, 0.02, 0.03, 0.04]), metadata)
+    monkeypatch.setattr("reptrace.mne_time_decode.mne.read_epochs", lambda *args, **kwargs: epochs)
+
+    out = tmp_path / "decode_registry.csv"
+    observations_out = tmp_path / "observations_registry.csv"
+
+    run_time_resolved_decode(
+        epochs_path=tmp_path / "sub-01_epo.fif",
+        label_column="condition",
+        out_path=out,
+        n_splits=2,
+        window_ms=20,
+        step_ms=20,
+        decoder="correlation-prototype",
+        emission_mode="uncalibrated",
+        observation_out_path=observations_out,
+    )
+
+    results = pd.read_csv(out)
+    observations = pd.read_csv(observations_out)
+
+    assert results["decoder"].unique().tolist() == ["correlation-prototype"]
+    assert observations["decoder"].unique().tolist() == ["correlation-prototype"]
+    assert len(results) == 4
+    assert len(observations) == 16
+    assert observations[["prob_class_0", "prob_class_1"]].sum(axis=1).round(6).tolist() == [1.0] * 16
+
+
 def test_temporal_train_window_ensemble_writes_all_test_times(tmp_path: Path, monkeypatch):
     rng = np.random.default_rng(17)
     labels = np.array(["animate", "inanimate"] * 4)
