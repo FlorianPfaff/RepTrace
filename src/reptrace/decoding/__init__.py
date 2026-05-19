@@ -29,6 +29,7 @@ FEATURE_PREPROCESSOR_CHOICES = ("none", "pca", "pca_whiten", "anova_select")
 TUNING_SCORING_CHOICES = ("accuracy", "balanced_accuracy", "neg_log_loss")
 DEFAULT_TUNING_C_GRID = (0.01, 0.1, 1.0, 10.0, 100.0)
 DEFAULT_ANOVA_SELECT_PERCENTILE = 20
+ANOVA_SELECT_PERCENTILE_GRID = (10, 20, 40, 60)
 
 
 def make_logistic_decoder(
@@ -159,6 +160,7 @@ def make_tuned_decoder(
             ),
         )
         param_grid = {"logisticregression__C": c_grid}
+        param_grid = _with_feature_preprocessor_tuning(estimator, param_grid, feature_preprocessor)
     elif normalized == "lda":
         estimator = make_pipeline(
             StandardScaler(),
@@ -175,6 +177,7 @@ def make_tuned_decoder(
                 "lineardiscriminantanalysis__shrinkage": ["auto"],
             },
         ]
+        param_grid = _with_feature_preprocessor_tuning(estimator, param_grid, feature_preprocessor)
     elif normalized == "shrinkage_lda":
         estimator = make_pipeline(
             StandardScaler(),
@@ -182,6 +185,7 @@ def make_tuned_decoder(
             LinearDiscriminantAnalysis(solver="lsqr"),
         )
         param_grid = {"lineardiscriminantanalysis__shrinkage": ["auto", 0.1, 0.3, 0.5, 0.7, 0.9]}
+        param_grid = _with_feature_preprocessor_tuning(estimator, param_grid, feature_preprocessor)
     else:
         if emission_mode == "uncalibrated" and scoring == "neg_log_loss":
             raise ValueError("neg_log_loss tuning requires probability estimates; use calibrated emissions for linear_svm.")
@@ -199,6 +203,7 @@ def make_tuned_decoder(
         else:
             estimator = _make_calibrated_classifier(linear_svm, method="sigmoid", cv=3)
             param_grid = {_calibrated_estimator_param(estimator, "linearsvc__C"): c_grid}
+        param_grid = _with_feature_preprocessor_tuning(estimator, param_grid, feature_preprocessor)
 
     return GridSearchCV(
         estimator=estimator,
@@ -226,6 +231,24 @@ def _calibrated_estimator_param(estimator, nested_parameter: str) -> str:
         if candidate in params:
             return candidate
     raise ValueError(f"Could not find calibrated-estimator parameter for '{nested_parameter}'.")
+
+
+def _feature_preprocessor_param(estimator, feature_preprocessor: str | None) -> str | None:
+    if normalize_feature_preprocessor(feature_preprocessor) != "anova_select":
+        return None
+    direct = "selectpercentile__percentile"
+    if direct in estimator.get_params():
+        return direct
+    return _calibrated_estimator_param(estimator, direct)
+
+
+def _with_feature_preprocessor_tuning(estimator, param_grid, feature_preprocessor: str | None):
+    feature_param = _feature_preprocessor_param(estimator, feature_preprocessor)
+    if feature_param is None:
+        return param_grid
+    if isinstance(param_grid, list):
+        return [{**grid, feature_param: ANOVA_SELECT_PERCENTILE_GRID} for grid in param_grid]
+    return {**param_grid, feature_param: ANOVA_SELECT_PERCENTILE_GRID}
 
 
 def parse_c_grid(values: Sequence[float] | str | None) -> tuple[float, ...]:

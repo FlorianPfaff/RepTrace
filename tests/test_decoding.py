@@ -143,6 +143,27 @@ def test_make_decoder_can_tune_regularization_with_inner_cv():
     assert model.best_params_["logisticregression__C"] in {0.1, 1.0}
 
 
+def test_tuned_anova_select_searches_percentile_inside_inner_cv():
+    rng = np.random.default_rng(17)
+    features = rng.normal(size=(24, 20))
+    labels = np.array([0, 1] * 12)
+
+    model = make_decoder(
+        "logistic",
+        max_iter=2000,
+        feature_preprocessor="anova-select",
+        pca_components=20,
+        tune_hyperparameters=True,
+        tuning_cv=2,
+        tuning_c_grid=(0.1, 1.0),
+    )
+    model.fit(features, labels)
+
+    assert model.predict_proba(features[:3]).shape == (3, 2)
+    assert model.best_params_["logisticregression__C"] in {0.1, 1.0}
+    assert model.best_params_["selectpercentile__percentile"] in {10, 20, 40, 60}
+
+
 def test_tuned_lda_compares_svd_and_shrinkage_variants():
     rng = np.random.default_rng(13)
     features = rng.normal(size=(24, 4))

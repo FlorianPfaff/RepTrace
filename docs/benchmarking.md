@@ -422,10 +422,10 @@ python -m reptrace.benchmark \
   --resume
 ```
 
-That manifest keeps the top 20 percent of features by ANOVA F score within
-each training fold, then tunes logistic C with 2-fold inner CV. This tests
-whether supervised fold-local denoising helps the main animate/inanimate task
-without changing the outer held-out folds.
+That manifest uses `anova-select` with an initial 20 percent setting, then
+tunes both the selected feature percentile (`10,20,40,60`) and logistic C with
+2-fold inner CV. This tests whether supervised fold-local denoising helps the
+main animate/inanimate task without changing the outer held-out folds.
 
 Run an explicit shrinkage-LDA variant over all 19 staged subjects:
 
