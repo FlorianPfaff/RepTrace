@@ -41,6 +41,14 @@ python -m reptrace.mne_time_decode \
 The output CSV contains fold-wise accuracy, log loss, Brier score, and expected
 calibration error for each time window.
 
+For probability-driven model selection, tune inside each outer training fold
+with a proper or calibration-oriented probability objective instead of accuracy:
+
+```bash
+python -m reptrace.mne_time_decode ... --tune-hyperparameters --tuning-scoring neg_log_loss
+python -m reptrace.mne_time_decode ... --tune-hyperparameters --tuning-scoring neg_brier
+```
+
 The optional observations CSV keeps the held-out decoder probabilities before
 they are reduced to accuracy or calibration summaries. Each row is one
 trial/time-window observation with the fold, time, sample index, true class,

@@ -13,7 +13,7 @@ from reptrace.plot_time_decode import plot_time_decode_results
 from reptrace.results import aggregate_time_decode_csvs, write_provenance_table
 from reptrace.temporal_smoothing import DEFAULT_EMISSION_SUFFIX, DEFAULT_FIT_WINDOW, smooth_probability_observations
 from reptrace.decoding import (
-    DECODER_CHOICES,
+    DECODER_CLI_CHOICES,
     EMISSION_MODE_CHOICES,
     FEATURE_PREPROCESSOR_CHOICES,
     TUNING_SCORING_CHOICES,
@@ -436,7 +436,7 @@ def main() -> None:
     parser.add_argument("--step-ms", type=float, default=10.0)
     parser.add_argument("--n-splits", type=int, default=5)
     parser.add_argument("--max-iter", type=int, default=1000)
-    parser.add_argument("--decoder", choices=DECODER_CHOICES, default="logistic")
+    parser.add_argument("--decoder", choices=DECODER_CLI_CHOICES, default="logistic")
     parser.add_argument("--emission-mode", choices=EMISSION_RUN_CHOICES, default="calibrated")
     parser.add_argument("--feature-preprocessor", choices=(*FEATURE_PREPROCESSOR_CHOICES, "pca-whiten"), default="none")
     parser.add_argument("--pca-components")

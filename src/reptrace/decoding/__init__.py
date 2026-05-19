@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import numpy as np
@@ -10,6 +10,7 @@ from sklearn.calibration import CalibratedClassifierCV
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import log_loss
 from sklearn.model_selection import GridSearchCV, StratifiedGroupKFold, StratifiedKFold
 from sklearn.naive_bayes import GaussianNB
 from sklearn.pipeline import make_pipeline
@@ -29,6 +30,7 @@ from reptrace.decoding.sampling import (
     normalize_class_limit_selection as normalize_class_limit_selection,
     select_class_limited_indices as select_class_limited_indices,
 )
+from reptrace.metrics import brier_score_multiclass, expected_calibration_error
 
 BUILTIN_DECODER_CHOICES = ("logistic", "gaussian_nb", "lda", "shrinkage_lda", "linear_svm")
 DECODER_ALIASES = (
@@ -49,9 +51,10 @@ DECODER_CHOICES = tuple(
         )
     )
 )
+DECODER_CLI_CHOICES = DECODER_CHOICES
 EMISSION_MODE_CHOICES = ("calibrated", "uncalibrated")
 FEATURE_PREPROCESSOR_CHOICES = ("none", "pca", "pca_whiten")
-TUNING_SCORING_CHOICES = ("accuracy", "balanced_accuracy", "neg_log_loss")
+TUNING_SCORING_CHOICES = ("accuracy", "balanced_accuracy", "neg_log_loss", "neg_brier", "neg_ece")
 DEFAULT_TUNING_C_GRID = (0.01, 0.1, 1.0, 10.0, 100.0)
 DEFAULT_TUNING_VAR_SMOOTHING_GRID = (1e-12, 1e-10, 1e-9, 1e-8, 1e-6)
 
@@ -381,8 +384,6 @@ def make_tuned_decoder(
         )
         param_grid = {"lineardiscriminantanalysis__shrinkage": ["auto", 0.1, 0.3, 0.5, 0.7, 0.9]}
     elif normalized == "linear_svm":
-        if emission_mode == "uncalibrated" and scoring == "neg_log_loss":
-            raise ValueError("neg_log_loss tuning requires probability estimates; use calibrated emissions for linear_svm.")
         linear_svm = make_pipeline(
             StandardScaler(),
             *feature_steps,
@@ -416,7 +417,7 @@ def make_tuned_decoder(
     return GridSearchCV(
         estimator=estimator,
         param_grid=param_grid,
-        scoring=scoring,
+        scoring=make_tuning_scorer(scoring, emission_mode=emission_mode),
         cv=cv,
         refit=True,
     )
@@ -461,6 +462,64 @@ def normalize_tuning_scoring(scoring: str) -> str:
     if normalized not in TUNING_SCORING_CHOICES:
         raise ValueError(f"Unknown tuning scoring '{scoring}'. Available values: {', '.join(TUNING_SCORING_CHOICES)}.")
     return normalized
+
+
+def make_tuning_scorer(scoring: str, *, emission_mode: str = "calibrated") -> str | Callable:
+    """Return a GridSearchCV scorer for decoder hyperparameter tuning.
+
+    Accuracy-oriented objectives are forwarded to scikit-learn by name. Probability
+    objectives are implemented here so they use the same calibrated or
+    score-derived emissions that RepTrace writes to the held-out observation
+    tables. This keeps model selection aligned with downstream temporal-state
+    inference, where probability quality matters more than the hard class label.
+    """
+    normalized = normalize_tuning_scoring(scoring)
+    emission_mode = normalize_emission_mode(emission_mode)
+    if normalized in {"accuracy", "balanced_accuracy"}:
+        return normalized
+    return _make_probability_tuning_scorer(normalized, emission_mode=emission_mode)
+
+
+def _make_probability_tuning_scorer(scoring: str, *, emission_mode: str) -> Callable:
+    def scorer(estimator, features: np.ndarray, labels: np.ndarray) -> float:
+        probabilities = predict_emission_probabilities(estimator, features, emission_mode=emission_mode)
+        label_indices = _labels_to_probability_columns(labels, estimator=estimator, n_classes=probabilities.shape[1])
+        if scoring == "neg_log_loss":
+            return -float(log_loss(label_indices, probabilities, labels=np.arange(probabilities.shape[1])))
+        if scoring == "neg_brier":
+            return -brier_score_multiclass(probabilities, label_indices)
+        if scoring == "neg_ece":
+            return -expected_calibration_error(probabilities, label_indices)
+        raise ValueError(f"Unknown probability tuning scoring '{scoring}'.")
+
+    return scorer
+
+
+def _labels_to_probability_columns(
+    labels: np.ndarray,
+    *,
+    estimator,
+    n_classes: int,
+) -> np.ndarray:
+    """Map estimator labels to probability-column indices for multiclass metrics."""
+    labels = np.asarray(labels)
+    classes = getattr(estimator, "classes_", None)
+    if classes is not None:
+        classes = np.asarray(classes)
+        if len(classes) != n_classes:
+            raise ValueError(f"Estimator reports {len(classes)} classes but predicted {n_classes} probability columns.")
+        class_to_index = {class_label: class_index for class_index, class_label in enumerate(classes.tolist())}
+        try:
+            return np.asarray([class_to_index[label] for label in labels.tolist()], dtype=int)
+        except KeyError as exc:
+            raise ValueError(f"Validation label {exc.args[0]!r} was not seen by the fitted estimator.") from exc
+
+    if not np.issubdtype(labels.dtype, np.integer):
+        raise ValueError("Probability tuning metrics require fitted estimator classes for non-integer labels.")
+    label_indices = labels.astype(int, copy=False)
+    if np.any((label_indices < 0) | (label_indices >= n_classes)):
+        raise ValueError("Integer labels must be valid probability-column indices.")
+    return label_indices
 
 
 def normalize_decoder_name(name: str) -> str:
