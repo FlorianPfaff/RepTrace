@@ -136,6 +136,32 @@ def test_tuned_lda_compares_svd_and_shrinkage_variants():
     assert model.predict_proba(features[:3]).shape == (3, 2)
 
 
+def test_shrinkage_lda_uses_lsqr_auto_shrinkage():
+    rng = np.random.default_rng(17)
+    features = rng.normal(size=(30, 12))
+    labels = np.array([0, 1] * 15)
+
+    model = make_decoder("shrinkage-lda")
+    model.fit(features, labels)
+
+    lda = model.named_steps["lineardiscriminantanalysis"]
+    assert lda.solver == "lsqr"
+    assert lda.shrinkage == "auto"
+    assert model.predict_proba(features[:3]).shape == (3, 2)
+
+
+def test_tuned_shrinkage_lda_selects_shrinkage_strength():
+    rng = np.random.default_rng(19)
+    features = rng.normal(size=(30, 8))
+    labels = np.array([0, 1] * 15)
+
+    model = make_decoder("lda-shrinkage", tune_hyperparameters=True, tuning_cv=2)
+    model.fit(features, labels)
+
+    assert "lineardiscriminantanalysis__shrinkage" in model.best_params_
+    assert model.predict_proba(features[:3]).shape == (3, 2)
+
+
 def test_parse_c_grid_accepts_comma_separated_values():
     assert parse_c_grid("0.1,1,10") == (0.1, 1.0, 10.0)
 
@@ -162,3 +188,4 @@ def test_score_to_probabilities_handles_binary_scores():
 
 def test_normalize_decoder_name_accepts_svm_alias():
     assert normalize_decoder_name("svm") == "linear_svm"
+    assert normalize_decoder_name("lda-shrinkage") == "shrinkage_lda"
