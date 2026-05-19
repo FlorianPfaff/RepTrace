@@ -7,7 +7,7 @@ import numpy as np
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, RidgeClassifier
 from sklearn.model_selection import GridSearchCV, StratifiedGroupKFold, StratifiedKFold
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
@@ -22,11 +22,12 @@ from reptrace.decoding.sampling import (
     select_class_limited_indices as select_class_limited_indices,
 )
 
-DECODER_CHOICES = ("logistic", "lda", "shrinkage_lda", "linear_svm")
+DECODER_CHOICES = ("logistic", "ridge", "lda", "shrinkage_lda", "linear_svm")
 EMISSION_MODE_CHOICES = ("calibrated", "uncalibrated")
 FEATURE_PREPROCESSOR_CHOICES = ("none", "pca", "pca_whiten")
 TUNING_SCORING_CHOICES = ("accuracy", "balanced_accuracy", "neg_log_loss")
 DEFAULT_TUNING_C_GRID = (0.01, 0.1, 1.0, 10.0, 100.0)
+DEFAULT_TUNING_ALPHA_GRID = (0.01, 0.1, 1.0, 10.0, 100.0)
 
 
 def make_logistic_decoder(
@@ -104,6 +105,22 @@ def make_decoder(
             *feature_steps,
             LinearDiscriminantAnalysis(solver="lsqr", shrinkage="auto"),
         )
+    if normalized == "ridge":
+        ridge = make_pipeline(
+            StandardScaler(),
+            *feature_steps,
+            RidgeClassifier(
+                class_weight="balanced",
+                max_iter=max_iter,
+            ),
+        )
+        if emission_mode == "uncalibrated":
+            return ridge
+        return _make_calibrated_classifier(
+            ridge,
+            method="sigmoid",
+            cv=3,
+        )
 
     linear_svm = make_pipeline(
         StandardScaler(),
@@ -136,7 +153,7 @@ def make_tuned_decoder(
     """Create a decoder with inner-CV hyperparameter selection.
 
     Logistic regression and linear SVM tune the regularization strength ``C``.
-    LDA compares the default SVD solver with shrinkage LDA
+    Ridge tunes the L2 penalty strength ``alpha``. LDA compares the default SVD solver with shrinkage LDA
     (``solver='lsqr', shrinkage='auto'``), which is often better conditioned for
     high-dimensional M/EEG windows.
     """
@@ -180,6 +197,23 @@ def make_tuned_decoder(
             LinearDiscriminantAnalysis(solver="lsqr"),
         )
         param_grid = {"lineardiscriminantanalysis__shrinkage": ["auto", 0.1, 0.3, 0.5, 0.7, 0.9]}
+    elif normalized == "ridge":
+        if emission_mode == "uncalibrated" and scoring == "neg_log_loss":
+            raise ValueError("neg_log_loss tuning requires probability estimates; use calibrated emissions for ridge.")
+        ridge = make_pipeline(
+            StandardScaler(),
+            *feature_steps,
+            RidgeClassifier(
+                class_weight="balanced",
+                max_iter=max_iter,
+            ),
+        )
+        if emission_mode == "uncalibrated":
+            estimator = ridge
+            param_grid = {"ridgeclassifier__alpha": DEFAULT_TUNING_ALPHA_GRID}
+        else:
+            estimator = _make_calibrated_classifier(ridge, method="sigmoid", cv=3)
+            param_grid = {_calibrated_estimator_param(estimator, "ridgeclassifier__alpha"): DEFAULT_TUNING_ALPHA_GRID}
     else:
         if emission_mode == "uncalibrated" and scoring == "neg_log_loss":
             raise ValueError("neg_log_loss tuning requires probability estimates; use calibrated emissions for linear_svm.")
@@ -253,6 +287,8 @@ def normalize_decoder_name(name: str) -> str:
     normalized = name.lower().replace("-", "_")
     if normalized == "svm":
         return "linear_svm"
+    if normalized in {"ridge_classifier", "ridge_classification"}:
+        return "ridge"
     if normalized in {"lda_shrinkage", "shrinkage_lda", "shrinkagelda"}:
         return "shrinkage_lda"
     if normalized not in DECODER_CHOICES:

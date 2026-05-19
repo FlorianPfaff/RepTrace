@@ -354,6 +354,7 @@ RepTrace supports standard probability-producing decoders with the `decoder`
 manifest column or `--decoder` CLI option:
 
 - `logistic`: balanced multinomial logistic regression;
+- `ridge`: calibrated balanced ridge classifier;
 - `lda`: linear discriminant analysis;
 - `shrinkage_lda`: LDA with LSQR covariance shrinkage estimated inside each
   training fold;
@@ -422,6 +423,23 @@ python -m reptrace.benchmark \
 shrinkage="auto")`. This is still fitted independently in each outer training
 fold, but it regularizes covariance estimates that can be unstable in short
 high-dimensional MEG windows.
+
+Run the ridge classifier variant over all 19 staged subjects:
+
+```bash
+python -m reptrace.benchmark \
+  benchmarks/nod_animate_ridge_all.csv \
+  --out-dir results/nod_animate_ridge_all \
+  --aggregate-out results/nod_animate_ridge_all/summary.csv \
+  --plot-out results/nod_animate_ridge_all/summary.png \
+  --calibration-dir results/nod_animate_ridge_all/calibration \
+  --chance 0.5 \
+  --resume
+```
+
+`ridge` uses a balanced `RidgeClassifier` with sigmoid calibration by default.
+When `tune_hyperparameters=true`, nested CV searches alpha values
+`0.01,0.1,1,10,100`.
 
 Run the slower tuned temporal train-window ensemble:
 
@@ -561,6 +579,18 @@ gh workflow run nod-decoder-all.yml \
   -f data_root=../data/nod \
   -f manifest_csv=benchmarks/nod_animate_shrinkage_lda_all.csv \
   -f output_dir=results/nod_animate_shrinkage_lda_all \
+  -f n_permutations=10000
+```
+
+Or run the ridge manifest:
+
+```bash
+gh workflow run nod-decoder-all.yml \
+  --repo IPS-Stuttgart/RepTrace \
+  --ref main \
+  -f data_root=../data/nod \
+  -f manifest_csv=benchmarks/nod_animate_ridge_all.csv \
+  -f output_dir=results/nod_animate_ridge_all \
   -f n_permutations=10000
 ```
 
