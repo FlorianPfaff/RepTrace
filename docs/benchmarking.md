@@ -379,6 +379,12 @@ tuning. The relevant columns are `feature_preprocessor`, `pca_components`,
 `tuning_c_grid`. These settings are preserved in aggregate summaries, so tuned
 and untuned variants are never averaged together accidentally.
 
+Each benchmark also writes `provenance.csv`. This table has one row per run
+condition and records decoder, emission mode, PCA mode/components, tuning grid,
+compact selected-parameter counts, temporal mode/train window, and selected
+plus effect-window `accuracy`, `log_loss`, `brier`, and `ece` values. Use it to
+check whether an apparent gain changes accuracy as well as calibration metrics.
+
 Run the tuned PCA-whitened logistic variant over all 19 staged subjects:
 
 ```bash
@@ -436,7 +442,8 @@ held-out probability observations, fits sticky forward-backward smoothing on
 those same observations, writes smoothed posterior metrics, and aggregates raw
 and smoothed rows into the same summary. The comparison appears as
 `emission_mode=calibrated` versus
-`emission_mode=calibrated_temporal_posterior`.
+`emission_mode=calibrated_temporal_posterior` in both `summary.csv` and
+`provenance.csv`.
 
 Generate a decoder comparison report:
 

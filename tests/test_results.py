@@ -2,7 +2,13 @@ from pathlib import Path
 
 import pandas as pd
 
-from reptrace.results import aggregate_time_decode_csvs, aggregate_time_decode_results, peak_metric_rows, summarize_metric_table
+from reptrace.results import (
+    aggregate_time_decode_csvs,
+    aggregate_time_decode_results,
+    build_provenance_table,
+    peak_metric_rows,
+    summarize_metric_table,
+)
 
 
 def _result_frame(subject: str, offset: float = 0.0) -> pd.DataFrame:
@@ -128,6 +134,40 @@ def test_aggregate_time_decode_results_keeps_temporal_train_windows_separate():
     assert aggregated["temporal_train_window_start"].tolist() == ["0.12", "0.12", "0.2", "0.2"]
     assert aggregated["temporal_train_window_stop"].tolist() == ["0.25", "0.25", "0.35", "0.35"]
     assert aggregated["accuracy_mean"].round(3).tolist() == [0.7, 0.8, 0.8, 0.9]
+
+
+def test_build_provenance_table_records_config_params_and_metrics():
+    baseline = _result_frame("s1")
+    baseline["decoder"] = "logistic"
+    baseline["emission_mode"] = "calibrated"
+    baseline["feature_preprocessor"] = "none"
+    baseline["tuned_hyperparameters"] = False
+    tuned = _result_frame("s1", offset=0.1)
+    tuned["decoder"] = "logistic"
+    tuned["emission_mode"] = "calibrated"
+    tuned["feature_preprocessor"] = "pca_whiten"
+    tuned["pca_components"] = "0.95"
+    tuned["tuned_hyperparameters"] = True
+    tuned["tuning_cv_splits"] = 2
+    tuned["tuning_scoring"] = "balanced_accuracy"
+    tuned["tuning_c_grid"] = "0.1|1.0|10.0"
+    tuned["best_params"] = ['{"logisticregression__C":1.0}', '{"logisticregression__C":10.0}'] * 2
+    tuned["best_score"] = [0.61, 0.64, 0.62, 0.66]
+    results = pd.concat([baseline, tuned], ignore_index=True)
+    summary = aggregate_time_decode_results(results)
+
+    provenance = build_provenance_table(summary, results, baseline_window=(0.1, 0.1), effect_window=(0.2, 0.2))
+    tuned_row = provenance.loc[provenance["pca_mode"] == "pca_whiten"].iloc[0]
+
+    assert provenance["decoder"].tolist() == ["logistic", "logistic"]
+    assert tuned_row["pca_components"] == "0.95"
+    assert tuned_row["tuning_c_grid"] == "0.1|1.0|10.0"
+    assert tuned_row["selected_params_unique"] == 2
+    assert "logisticregression__C" in tuned_row["selected_params"]
+    assert round(float(tuned_row["selected_accuracy"]), 3) == 0.9
+    assert round(float(tuned_row["selected_log_loss"]), 3) == 0.4
+    assert round(float(tuned_row["selected_ece"]), 3) == 0.2
+    assert round(float(tuned_row["accuracy_effect_minus_baseline"]), 3) == 0.1
 
 
 def test_summarize_metric_table_reports_participants_chance_and_scaled_values():

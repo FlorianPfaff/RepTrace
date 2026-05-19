@@ -25,6 +25,8 @@ __all__ = [
     "read_time_decode_results",
     "subject_time_metrics",
     "summarize_metric_table",
+    "build_provenance_table",
+    "write_provenance_table",
 ]
 
 METRIC_COLUMNS = ("accuracy", "log_loss", "brier", "ece")
@@ -46,6 +48,8 @@ SUMMARY_GROUP_COLUMNS = (
 )
 WEIGHT_COLUMN = "n_test"
 DEFAULT_ECE_BINS = 10
+PROVENANCE_METRICS = ("accuracy", "log_loss", "brier", "ece")
+LOWER_IS_BETTER_METRICS = {"log_loss", "brier", "ece"}
 GROUP_COLUMN_DEFAULTS = {
     "emission_mode": "calibrated",
     "feature_preprocessor": "none",
@@ -61,6 +65,48 @@ GROUP_COLUMN_DEFAULTS = {
     "temporal_smoothing_fit_window_start": "",
     "temporal_smoothing_fit_window_stop": "",
 }
+
+PROVENANCE_COLUMN_ORDER = (
+    "decoder",
+    "emission_mode",
+    "pca_mode",
+    "pca_components",
+    "tuned_hyperparameters",
+    "tuning_cv_splits",
+    "tuning_scoring",
+    "tuning_c_grid",
+    "selected_params",
+    "selected_params_unique",
+    "best_score_mean",
+    "best_score_min",
+    "best_score_max",
+    "temporal_mode",
+    "temporal_train_window_start",
+    "temporal_train_window_stop",
+    "temporal_smoothing_method",
+    "temporal_smoothing_fit_window_start",
+    "temporal_smoothing_fit_window_stop",
+    "n_subjects",
+    "selection_metric",
+    "selected_time",
+    "selected_accuracy",
+    "selected_log_loss",
+    "selected_brier",
+    "selected_ece",
+    "baseline_accuracy_mean",
+    "baseline_log_loss_mean",
+    "baseline_brier_mean",
+    "baseline_ece_mean",
+    "effect_accuracy_mean",
+    "effect_log_loss_mean",
+    "effect_brier_mean",
+    "effect_ece_mean",
+    "accuracy_effect_minus_baseline",
+    "log_loss_effect_improvement",
+    "brier_effect_improvement",
+    "ece_effect_improvement",
+    "source_files",
+)
 
 
 def _truthy(value: object) -> bool:
@@ -429,6 +475,166 @@ def subject_time_metrics(
             expected_counts=_expected_observation_counts(results, subject_time_keys),
         )
     return subject_time.sort_values(subject_time_keys).reset_index(drop=True)
+
+
+def _best_summary_row(frame: pd.DataFrame, selection_metric: str) -> pd.Series:
+    selection_column = f"{selection_metric}_mean"
+    if selection_column not in frame.columns:
+        raise ValueError(f"Summary is missing selection metric column '{selection_column}'.")
+    values = pd.to_numeric(frame[selection_column], errors="coerce")
+    if values.notna().sum() == 0:
+        raise ValueError(f"Selection metric column '{selection_column}' contains no finite values.")
+    index = values.idxmin() if selection_metric in LOWER_IS_BETTER_METRICS else values.idxmax()
+    return frame.loc[index]
+
+
+def _safe_window_mean(frame: pd.DataFrame, column: str, window: tuple[float, float]) -> float:
+    if column not in frame.columns:
+        return float("nan")
+    times = pd.to_numeric(frame["time"], errors="coerce")
+    values = pd.to_numeric(frame[column], errors="coerce")
+    mask = (times >= window[0]) & (times <= window[1])
+    if not bool(mask.any()):
+        return float("nan")
+    return float(values.loc[mask].mean())
+
+
+def _compact_value_counts(values: pd.Series, *, max_values: int = 8) -> tuple[str, int]:
+    cleaned = values.dropna().astype(str).str.strip()
+    cleaned = cleaned[cleaned.str.len() > 0]
+    if cleaned.empty:
+        return "", 0
+    counts = cleaned.value_counts(sort=True)
+    parts = [f"{value}:{int(count)}" for value, count in counts.head(max_values).items()]
+    if len(counts) > max_values:
+        parts.append(f"...:{int(counts.iloc[max_values:].sum())}")
+    return ";".join(parts), int(len(counts))
+
+
+def _score_summary(values: pd.Series) -> dict[str, float]:
+    numeric = pd.to_numeric(values, errors="coerce").dropna()
+    if numeric.empty:
+        return {
+            "best_score_mean": float("nan"),
+            "best_score_min": float("nan"),
+            "best_score_max": float("nan"),
+        }
+    return {
+        "best_score_mean": float(numeric.mean()),
+        "best_score_min": float(numeric.min()),
+        "best_score_max": float(numeric.max()),
+    }
+
+
+def _provenance_metadata(results: pd.DataFrame, group_columns: list[str]) -> pd.DataFrame:
+    if results is None or results.empty:
+        return pd.DataFrame(columns=[*group_columns, "selected_params", "selected_params_unique", "source_files"])
+
+    normalized = _normalize_group_defaults(results)
+    for column in group_columns:
+        if column not in normalized.columns:
+            normalized[column] = GROUP_COLUMN_DEFAULTS.get(column, "")
+
+    rows: list[dict[str, object]] = []
+    grouper = group_columns[0] if len(group_columns) == 1 else group_columns
+    for keys, group in normalized.groupby(grouper, dropna=False, sort=True):
+        key_values = keys if isinstance(keys, tuple) else (keys,)
+        row = dict(zip(group_columns, key_values, strict=True))
+        selected_params, selected_params_unique = _compact_value_counts(
+            group["best_params"] if "best_params" in group.columns else pd.Series(dtype=object)
+        )
+        row["selected_params"] = selected_params
+        row["selected_params_unique"] = selected_params_unique
+        row.update(_score_summary(group["best_score"] if "best_score" in group.columns else pd.Series(dtype=float)))
+        if "source_file" in group.columns:
+            source_files = sorted(group["source_file"].dropna().astype(str).unique())
+            row["source_files"] = "|".join(source_files)
+        else:
+            row["source_files"] = ""
+        rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
+def build_provenance_table(
+    summary: pd.DataFrame,
+    results: pd.DataFrame | None = None,
+    *,
+    baseline_window: tuple[float, float] = (-0.1, 0.0),
+    effect_window: tuple[float, float] = (0.1, 0.8),
+    selection_metric: str = "accuracy",
+) -> pd.DataFrame:
+    """Build one-row-per-run provenance with selected parameters and metrics."""
+    if selection_metric not in PROVENANCE_METRICS:
+        allowed = ", ".join(PROVENANCE_METRICS)
+        raise ValueError(f"selection_metric must be one of: {allowed}")
+    if "time" not in summary.columns:
+        raise ValueError("Summary must contain a time column.")
+
+    normalized_summary = _normalize_group_defaults(summary)
+    group_columns = [column for column in SUMMARY_GROUP_COLUMNS if column in normalized_summary.columns]
+    rows: list[dict[str, object]] = []
+    grouper = group_columns[0] if len(group_columns) == 1 else group_columns
+    for keys, group in normalized_summary.groupby(grouper, dropna=False, sort=True):
+        key_values = keys if isinstance(keys, tuple) else (keys,)
+        group_values = dict(zip(group_columns, key_values, strict=True))
+        selected = _best_summary_row(group, selection_metric)
+        row: dict[str, object] = {
+            **group_values,
+            "pca_mode": group_values.get("feature_preprocessor", "none"),
+            "n_subjects": int(selected["n_subjects"]) if "n_subjects" in selected else "",
+            "selection_metric": selection_metric,
+            "selected_time": float(selected["time"]),
+        }
+        for metric in PROVENANCE_METRICS:
+            row[f"selected_{metric}"] = float(selected.get(f"{metric}_mean", np.nan))
+            row[f"baseline_{metric}_mean"] = _safe_window_mean(group, f"{metric}_mean", baseline_window)
+            row[f"effect_{metric}_mean"] = _safe_window_mean(group, f"{metric}_mean", effect_window)
+        row["accuracy_effect_minus_baseline"] = row["effect_accuracy_mean"] - row["baseline_accuracy_mean"]
+        row["log_loss_effect_improvement"] = row["baseline_log_loss_mean"] - row["effect_log_loss_mean"]
+        row["brier_effect_improvement"] = row["baseline_brier_mean"] - row["effect_brier_mean"]
+        row["ece_effect_improvement"] = row["baseline_ece_mean"] - row["effect_ece_mean"]
+        rows.append(row)
+
+    provenance = pd.DataFrame(rows)
+    if results is not None:
+        metadata = _provenance_metadata(results, group_columns)
+        provenance = provenance.merge(metadata, on=group_columns, how="left", validate="one_to_one")
+    for column in ("selected_params", "source_files"):
+        if column not in provenance.columns:
+            provenance[column] = ""
+        provenance[column] = provenance[column].fillna("")
+    for column in ("selected_params_unique", "best_score_mean", "best_score_min", "best_score_max"):
+        if column not in provenance.columns:
+            provenance[column] = np.nan
+
+    provenance = provenance.drop(columns=["feature_preprocessor"], errors="ignore")
+    ordered = [column for column in PROVENANCE_COLUMN_ORDER if column in provenance.columns]
+    extras = [column for column in provenance.columns if column not in ordered]
+    return provenance[[*ordered, *extras]].reset_index(drop=True)
+
+
+def write_provenance_table(
+    summary: pd.DataFrame,
+    result_csv_paths: list[Path] | None,
+    out_path: Path,
+    *,
+    baseline_window: tuple[float, float] = (-0.1, 0.0),
+    effect_window: tuple[float, float] = (0.1, 0.8),
+    selection_metric: str = "accuracy",
+) -> pd.DataFrame:
+    """Write a benchmark provenance CSV from an aggregate summary and fold-level results."""
+    results = read_time_decode_results(result_csv_paths) if result_csv_paths else None
+    provenance = build_provenance_table(
+        summary,
+        results,
+        baseline_window=baseline_window,
+        effect_window=effect_window,
+        selection_metric=selection_metric,
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    provenance.to_csv(out_path, index=False)
+    return provenance
 
 
 def aggregate_time_decode_results(
