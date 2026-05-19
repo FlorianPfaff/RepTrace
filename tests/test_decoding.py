@@ -6,6 +6,7 @@ from reptrace.decoding import (
     make_cross_validator,
     make_decoder,
     make_tuning_cross_validator,
+    normalize_anova_select_percentile,
     normalize_decoder_name,
     normalize_feature_preprocessor,
     normalize_pca_components,
@@ -92,6 +93,21 @@ def test_make_decoder_accepts_pca_whiten_alias_and_fractional_components():
     assert probabilities.sum(axis=1).round(6).tolist() == [1.0] * 5
 
 
+def test_make_decoder_fits_anova_selection_inside_probability_pipeline():
+    rng = np.random.default_rng(13)
+    features = rng.normal(size=(40, 20))
+    labels = np.array([0, 1] * 20)
+
+    model = make_decoder("logistic", max_iter=2000, feature_preprocessor="anova-select", pca_components=25)
+    model.fit(features, labels)
+    probabilities = model.predict_proba(features[:5])
+
+    selector = model.named_steps["selectpercentile"]
+    assert selector.percentile == 25
+    assert probabilities.shape == (5, 2)
+    assert probabilities.sum(axis=1).round(6).tolist() == [1.0] * 5
+
+
 def test_pca_components_are_only_allowed_with_pca_preprocessing():
     with pytest.raises(ValueError, match="pca_components"):
         make_decoder("logistic", feature_preprocessor="none", pca_components=3)
@@ -99,10 +115,13 @@ def test_pca_components_are_only_allowed_with_pca_preprocessing():
 
 def test_normalize_feature_preprocessor_and_components():
     assert normalize_feature_preprocessor("pca-whiten") == "pca_whiten"
+    assert normalize_feature_preprocessor("select-percentile") == "anova_select"
     assert normalize_feature_preprocessor("identity") == "none"
     assert normalize_pca_components("3") == 3
     assert normalize_pca_components("0.95") == 0.95
     assert normalize_pca_components("auto") is None
+    assert normalize_anova_select_percentile(None) == 20
+    assert normalize_anova_select_percentile("25") == 25
 
 
 def test_make_decoder_can_tune_regularization_with_inner_cv():

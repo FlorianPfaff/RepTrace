@@ -438,8 +438,18 @@ def main() -> None:
     parser.add_argument("--max-iter", type=int, default=1000)
     parser.add_argument("--decoder", choices=DECODER_CHOICES, default="logistic")
     parser.add_argument("--emission-mode", choices=EMISSION_RUN_CHOICES, default="calibrated")
-    parser.add_argument("--feature-preprocessor", choices=(*FEATURE_PREPROCESSOR_CHOICES, "pca-whiten"), default="none")
-    parser.add_argument("--pca-components")
+    parser.add_argument(
+        "--feature-preprocessor",
+        choices=(*FEATURE_PREPROCESSOR_CHOICES, "pca-whiten", "anova-select", "select-percentile"),
+        default="none",
+    )
+    parser.add_argument(
+        "--pca-components",
+        help=(
+            "PCA component count or explained-variance fraction. With "
+            "--feature-preprocessor anova-select, this is the selected feature percentile."
+        ),
+    )
     parser.add_argument("--tune-hyperparameters", action="store_true")
     parser.add_argument("--tuning-cv-splits", type=int, default=3)
     parser.add_argument("--tuning-scoring", choices=TUNING_SCORING_CHOICES, default="accuracy")
