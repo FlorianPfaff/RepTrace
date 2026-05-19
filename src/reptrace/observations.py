@@ -13,6 +13,8 @@ import pandas as pd
 
 STANDARD_OBSERVATION_COLUMNS: tuple[str, ...] = (
     "subject",
+    "dataset",
+    "task",
     "session",
     "stream_id",
     "fold",
@@ -117,6 +119,8 @@ class ProbabilityObservationTable:
         time: float,
         original_indices: Sequence[int] | np.ndarray | None = None,
         subject: str | None = None,
+        dataset: str | None = None,
+        task: str | None = None,
         session_values: Sequence[object] | np.ndarray | pd.Series | None = None,
         group_values: Sequence[object] | np.ndarray | pd.Series | None = None,
         split_id: str = "",
@@ -150,6 +154,8 @@ class ProbabilityObservationTable:
             sample_index = _value_at(original_indices, int(filtered_index))
             row: dict[str, object] = {
                 "subject": "" if subject is None else subject,
+                "dataset": "" if dataset is None else dataset,
+                "task": "" if task is None else task,
                 "session": _value_at(session_values, int(filtered_index)),
                 "fold": fold,
                 "split_id": split_id,

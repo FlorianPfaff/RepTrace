@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -12,7 +13,20 @@ import pandas as pd
 from sklearn.metrics import accuracy_score, log_loss
 from sklearn.preprocessing import LabelEncoder
 
-from reptrace.decoding import make_decoder, normalize_decoder_name, normalize_emission_mode, predict_emission_probabilities
+from reptrace.decoding import (
+    DECODER_CHOICES,
+    FEATURE_PREPROCESSOR_CHOICES,
+    TUNING_SCORING_CHOICES,
+    make_decoder,
+    make_tuning_cross_validator,
+    normalize_decoder_name,
+    normalize_emission_mode,
+    normalize_feature_preprocessor,
+    normalize_pca_components,
+    normalize_tuning_scoring,
+    parse_c_grid,
+    predict_emission_probabilities,
+)
 from reptrace.observations import ProbabilityObservationTable, stable_hash
 from reptrace.stimulus_detection import (
     CONFLICT_RESOLUTION_MODES,
@@ -23,6 +37,9 @@ from reptrace.stimulus_detection import (
     match_stimulus_annotations,
     summarize_stimulus_events,
 )
+
+
+FEATURE_PREPROCESSOR_RUN_CHOICES = (*FEATURE_PREPROCESSOR_CHOICES, "pca-whiten")
 
 
 @dataclass(frozen=True)
@@ -132,7 +149,7 @@ def _event_features(
     picks: str | Sequence[str],
     baseline: tuple[float | None, float | None] | None,
     demean_window: bool,
-) -> tuple[np.ndarray, np.ndarray, list[str], int]:
+) -> tuple[np.ndarray, np.ndarray, list[str], int, pd.DataFrame]:
     raw = mne.io.read_raw_fif(raw_path, preload=False, verbose="error")
     epochs = mne.Epochs(
         raw,
@@ -152,8 +169,53 @@ def _event_features(
     data = epochs.get_data(copy=False)
     if demean_window:
         data = data - data.mean(axis=2, keepdims=True)
-    labels = epochs.metadata[label_column].astype(str).to_numpy()
-    return data.reshape(len(labels), -1), labels, list(epochs.ch_names), data.shape[2]
+    metadata = epochs.metadata.reset_index(drop=True).copy()
+    labels = metadata[label_column].astype(str).to_numpy()
+    return data.reshape(len(labels), -1), labels, list(epochs.ch_names), data.shape[2], metadata
+
+
+def _best_params_json(model: object) -> str:
+    best_params = getattr(model, "best_params_", None)
+    if best_params is None:
+        return ""
+    return json.dumps(
+        best_params,
+        sort_keys=True,
+        default=str,
+        separators=(",", ":"),
+    )
+
+
+def _best_scores(model: object) -> list[float]:
+    if hasattr(model, "best_score_"):
+        return [float(getattr(model, "best_score_"))]
+    return []
+
+
+def _tuning_metadata(
+    model: object,
+    *,
+    tune_hyperparameters: bool,
+    tuning_cv_splits: int,
+    tuning_scoring: str,
+    tuning_c_grid: Sequence[float],
+) -> dict[str, object]:
+    metadata: dict[str, object] = {
+        "tuned_hyperparameters": bool(tune_hyperparameters),
+        "tuning_cv_splits": int(tuning_cv_splits) if tune_hyperparameters else "",
+        "tuning_scoring": tuning_scoring if tune_hyperparameters else "",
+        "tuning_c_grid": "|".join(str(value) for value in tuning_c_grid) if tune_hyperparameters else "",
+        "best_params": "",
+    }
+    if not tune_hyperparameters:
+        return metadata
+    metadata["best_params"] = _best_params_json(model)
+    scores = _best_scores(model)
+    if len(scores) == 1:
+        metadata["best_score"] = scores[0]
+    elif scores:
+        metadata["best_scores"] = json.dumps(scores, separators=(",", ":"))
+    return metadata
 
 
 def _fit_decoder(
@@ -167,14 +229,21 @@ def _fit_decoder(
     baseline: tuple[float | None, float | None] | None,
     decoder: str,
     emission_mode: str,
+    feature_preprocessor: str,
+    pca_components: int | float | None,
     max_iter: int,
     demean_window: bool,
-) -> tuple[object, LabelEncoder, list[str], int, pd.DataFrame]:
+    tune_hyperparameters: bool,
+    tuning_cv_splits: int,
+    tuning_scoring: str,
+    tuning_c_grid: Sequence[float],
+    tuning_group_column: str | None = None,
+) -> tuple[object, LabelEncoder, list[str], int, pd.DataFrame, dict[str, object]]:
     classes = sorted(train_events[label_column].dropna().astype(str).unique())
     if len(classes) < 2:
         raise ValueError("Training events must contain at least two classes.")
     event_id = {class_name: index + 1 for index, class_name in enumerate(classes)}
-    features, raw_labels, channel_names, n_window = _event_features(
+    features, raw_labels, channel_names, n_window, feature_metadata = _event_features(
         raw_path=train_raw,
         events=train_events,
         onset_column=onset_column,
@@ -187,10 +256,41 @@ def _fit_decoder(
     )
     encoder = LabelEncoder()
     labels = encoder.fit_transform(raw_labels)
-    model = make_decoder(decoder, max_iter=max_iter, emission_mode=emission_mode)
+
+    if tuning_group_column is not None:
+        if tuning_group_column not in feature_metadata.columns:
+            raise ValueError(
+                f"Training events are missing tuning group column '{tuning_group_column}'."
+            )
+        tuning_groups = feature_metadata[tuning_group_column].to_numpy()
+    else:
+        tuning_groups = None
+    tuning_cv = (
+        make_tuning_cross_validator(labels, tuning_groups, tuning_cv_splits)
+        if tune_hyperparameters
+        else 3
+    )
+    model = make_decoder(
+        decoder,
+        max_iter=max_iter,
+        emission_mode=emission_mode,
+        feature_preprocessor=feature_preprocessor,
+        pca_components=pca_components,
+        tune_hyperparameters=tune_hyperparameters,
+        tuning_cv=tuning_cv,
+        tuning_scoring=tuning_scoring,
+        tuning_c_grid=tuning_c_grid,
+    )
     model.fit(features, labels)
     counts = pd.Series(raw_labels, name=label_column).value_counts().rename_axis(label_column).reset_index(name="n_train_events")
-    return model, encoder, channel_names, n_window, counts
+    tuning_metadata = _tuning_metadata(
+        model,
+        tune_hyperparameters=tune_hyperparameters,
+        tuning_cv_splits=tuning_cv_splits,
+        tuning_scoring=tuning_scoring,
+        tuning_c_grid=tuning_c_grid,
+    )
+    return model, encoder, channel_names, n_window, counts, tuning_metadata
 
 
 def _safe_stream_id(path: Path) -> str:
@@ -210,6 +310,8 @@ def _continuous_preprocessing_hash(
     scan_step: float,
     n_window_samples: int,
     channel_names: Sequence[str],
+    feature_preprocessor: str,
+    pca_components: int | float | None,
 ) -> str:
     return stable_hash(
         {
@@ -220,12 +322,48 @@ def _continuous_preprocessing_hash(
             "scan_step": scan_step,
             "n_window_samples": n_window_samples,
             "channel_names": list(channel_names),
+            "feature_preprocessor": feature_preprocessor,
+            "pca_components": pca_components,
         }
     )
 
 
-def _continuous_model_hash(*, decoder: str, emission_mode: str, max_iter: int, train_window: tuple[float, float]) -> str:
-    return stable_hash({"backend": "sklearn", "decoder": decoder, "emission_mode": emission_mode, "max_iter": max_iter, "train_window": train_window})
+def _continuous_model_hash(
+    *,
+    decoder: str,
+    emission_mode: str,
+    max_iter: int,
+    train_window: tuple[float, float],
+    feature_preprocessor: str,
+    pca_components: int | float | None,
+    tune_hyperparameters: bool,
+    tuning_cv_splits: int,
+    tuning_scoring: str,
+    tuning_c_grid: Sequence[float],
+    tuning_group_column: str | None,
+    tuning_metadata: dict[str, object],
+) -> str:
+    payload: dict[str, object] = {
+        "backend": "sklearn",
+        "decoder": decoder,
+        "emission_mode": emission_mode,
+        "max_iter": max_iter,
+        "train_window": train_window,
+        "feature_preprocessor": feature_preprocessor,
+        "pca_components": pca_components,
+    }
+    if tune_hyperparameters:
+        payload.update(
+            {
+                "tune_hyperparameters": True,
+                "tuning_cv_splits": tuning_cv_splits,
+                "tuning_scoring": tuning_scoring,
+                "tuning_c_grid": tuple(tuning_c_grid),
+                "tuning_group_column": "" if tuning_group_column is None else tuning_group_column,
+                "best_params": tuning_metadata.get("best_params", ""),
+            }
+        )
+    return stable_hash(payload)
 
 
 def _standardize_stream_observations(
@@ -239,8 +377,12 @@ def _standardize_stream_observations(
     train_time: float,
     preprocessing_hash: str,
     model_hash: str,
+    feature_preprocessor: str,
+    pca_components: int | float | None,
+    tuning_metadata: dict[str, object] | None = None,
 ) -> pd.DataFrame:
     standardized = observations.copy()
+    tuning_metadata = {} if tuning_metadata is None else tuning_metadata
     if "sequence_id" not in standardized.columns and {"stream_id", "sample_index"}.issubset(standardized.columns):
         standardized["sequence_id"] = standardized["stream_id"].astype(str) + ":" + standardized["sample_index"].astype(str)
     return ProbabilityObservationTable(standardized).standardized(
@@ -256,6 +398,9 @@ def _standardize_stream_observations(
             "calibration_fold": "",
             "preprocessing_hash": preprocessing_hash,
             "model_hash": model_hash,
+            "feature_preprocessor": feature_preprocessor,
+            "pca_components": "" if pca_components is None else pca_components,
+            **tuning_metadata,
         }
     ).frame
 
@@ -462,7 +607,10 @@ def _held_out_event_metrics(
     baseline: tuple[float | None, float | None] | None,
     decoder: str,
     emission_mode: str,
+    feature_preprocessor: str,
+    pca_components: int | float | None,
     demean_window: bool,
+    tuning_metadata: dict[str, object] | None = None,
 ) -> pd.DataFrame:
     if scan_events is None or scan_events.empty:
         return pd.DataFrame()
@@ -470,7 +618,7 @@ def _held_out_event_metrics(
     if event_frame.empty:
         return pd.DataFrame()
     event_id = {str(class_name): index + 1 for index, class_name in enumerate(encoder.classes_)}
-    features, raw_labels, _channel_names, _n_window = _event_features(
+    features, raw_labels, _channel_names, _n_window, _feature_metadata = _event_features(
         raw_path=scan_raw,
         events=event_frame,
         onset_column=onset_column,
@@ -484,17 +632,17 @@ def _held_out_event_metrics(
     labels = encoder.transform(raw_labels)
     probabilities = predict_emission_probabilities(model, features, emission_mode=emission_mode)
     predictions = probabilities.argmax(axis=1)
-    return pd.DataFrame(
-        [
-            {
-                "decoder": decoder,
-                "emission_mode": emission_mode,
-                "n_events": len(labels),
-                "accuracy": accuracy_score(labels, predictions),
-                "log_loss": log_loss(labels, probabilities, labels=np.arange(len(encoder.classes_))),
-            }
-        ]
-    )
+    row = {
+        "decoder": decoder,
+        "emission_mode": emission_mode,
+        "feature_preprocessor": feature_preprocessor,
+        "pca_components": "" if pca_components is None else pca_components,
+        "n_events": len(labels),
+        "accuracy": accuracy_score(labels, predictions),
+        "log_loss": log_loss(labels, probabilities, labels=np.arange(len(encoder.classes_))),
+    }
+    row.update(tuning_metadata or {})
+    return pd.DataFrame([row])
 
 
 # pylint: disable-next=too-many-arguments,too-many-locals
@@ -512,8 +660,15 @@ def run_continuous_stimulus_scan(
     baseline: tuple[float | None, float | None] | None = None,
     decoder: str = "logistic",
     emission_mode: str = "calibrated",
+    feature_preprocessor: str = "none",
+    pca_components: int | float | str | None = None,
     max_iter: int = 1000,
     demean_window: bool = False,
+    tune_hyperparameters: bool = False,
+    tuning_cv_splits: int = 3,
+    tuning_scoring: str = "accuracy",
+    tuning_c_grid: Sequence[float] | str | None = None,
+    tuning_group_column: str | None = None,
     scan_step: float = 0.025,
     scan_start: float | None = None,
     scan_stop: float | None = None,
@@ -544,7 +699,13 @@ def run_continuous_stimulus_scan(
     out_dir.mkdir(parents=True, exist_ok=True)
     decoder_name = normalize_decoder_name(decoder)
     emission_mode_name = normalize_emission_mode(emission_mode)
-    model, encoder, channel_names, n_window_samples, train_counts = _fit_decoder(
+    feature_preprocessor_name = normalize_feature_preprocessor(feature_preprocessor)
+    if feature_preprocessor_name == "none" and pca_components is not None:
+        raise ValueError("pca_components can only be set when feature_preprocessor is 'pca' or 'pca_whiten'.")
+    pca_components_value = normalize_pca_components(pca_components) if feature_preprocessor_name != "none" else None
+    tuning_scoring_name = normalize_tuning_scoring(tuning_scoring)
+    tuning_c_grid_values = parse_c_grid(tuning_c_grid)
+    model, encoder, channel_names, n_window_samples, train_counts, tuning_metadata = _fit_decoder(
         train_raw=train_raw,
         train_events=train_events,
         onset_column=onset_column,
@@ -554,8 +715,15 @@ def run_continuous_stimulus_scan(
         baseline=baseline,
         decoder=decoder_name,
         emission_mode=emission_mode_name,
+        feature_preprocessor=feature_preprocessor_name,
+        pca_components=pca_components_value,
         max_iter=max_iter,
         demean_window=demean_window,
+        tune_hyperparameters=tune_hyperparameters,
+        tuning_cv_splits=tuning_cv_splits,
+        tuning_scoring=tuning_scoring_name,
+        tuning_c_grid=tuning_c_grid_values,
+        tuning_group_column=tuning_group_column,
     )
     targets = list(target_classes or [str(encoder.classes_[0])])
     latency = float(np.mean(train_window)) if annotation_latency is None else annotation_latency
@@ -568,12 +736,22 @@ def run_continuous_stimulus_scan(
         scan_step=scan_step,
         n_window_samples=n_window_samples,
         channel_names=channel_names,
+        feature_preprocessor=feature_preprocessor_name,
+        pca_components=pca_components_value,
     )
     model_hash = _continuous_model_hash(
         decoder=decoder_name,
         emission_mode=emission_mode_name,
         max_iter=max_iter,
         train_window=train_window,
+        feature_preprocessor=feature_preprocessor_name,
+        pca_components=pca_components_value,
+        tune_hyperparameters=tune_hyperparameters,
+        tuning_cv_splits=tuning_cv_splits,
+        tuning_scoring=tuning_scoring_name,
+        tuning_c_grid=tuning_c_grid_values,
+        tuning_group_column=tuning_group_column,
+        tuning_metadata=tuning_metadata,
     )
     segments = build_scan_segments(
         scan_raw=scan_raw,
@@ -616,6 +794,9 @@ def run_continuous_stimulus_scan(
         train_time=float(np.mean(train_window)),
         preprocessing_hash=preprocessing_hash,
         model_hash=model_hash,
+        feature_preprocessor=feature_preprocessor_name,
+        pca_components=pca_components_value,
+        tuning_metadata=tuning_metadata,
     )
     annotations = _annotation_table(
         scan_events=scan_events,
@@ -638,7 +819,10 @@ def run_continuous_stimulus_scan(
         baseline=baseline,
         decoder=decoder_name,
         emission_mode=emission_mode_name,
+        feature_preprocessor=feature_preprocessor_name,
+        pca_components=pca_components_value,
         demean_window=demean_window,
+        tuning_metadata=tuning_metadata,
     )
     if not event_metrics.empty and subject is not None:
         event_metrics.insert(0, "subject", subject)
@@ -724,8 +908,39 @@ def main() -> None:
     parser.add_argument("--train-window", nargs=2, type=float, required=True, metavar=("START", "STOP"))
     parser.add_argument("--picks", default="data")
     parser.add_argument("--epoch-baseline", nargs=2, metavar=("START", "STOP"))
-    parser.add_argument("--decoder", default="logistic")
+    parser.add_argument("--decoder", choices=DECODER_CHOICES, default="logistic")
     parser.add_argument("--emission-mode", default="calibrated")
+    parser.add_argument("--feature-preprocessor", choices=FEATURE_PREPROCESSOR_RUN_CHOICES, default="none")
+    parser.add_argument(
+        "--pca-components",
+        help="PCA component count or explained-variance fraction. Only valid with --feature-preprocessor pca or pca-whiten.",
+    )
+    parser.add_argument(
+        "--tune-hyperparameters",
+        action="store_true",
+        help="Use inner-CV hyperparameter selection on the training events before scanning.",
+    )
+    parser.add_argument(
+        "--tuning-cv-splits",
+        type=int,
+        default=3,
+        help="Maximum number of inner CV folds for --tune-hyperparameters.",
+    )
+    parser.add_argument(
+        "--tuning-scoring",
+        choices=TUNING_SCORING_CHOICES,
+        default="accuracy",
+        help="Inner-CV objective for --tune-hyperparameters.",
+    )
+    parser.add_argument(
+        "--tuning-c-grid",
+        default=",".join(str(value) for value in parse_c_grid(None)),
+        help="Comma-separated positive C values for tuned logistic regression and linear SVM.",
+    )
+    parser.add_argument(
+        "--tuning-group-column",
+        help="Optional training-event metadata column whose values must stay in the same inner-CV fold.",
+    )
     parser.add_argument("--max-iter", type=int, default=1000)
     parser.add_argument("--demean-window", action="store_true")
     parser.add_argument("--scan-step", type=float, default=0.025)
@@ -797,8 +1012,15 @@ def main() -> None:
         baseline=_optional_baseline(args.epoch_baseline),
         decoder=args.decoder,
         emission_mode=args.emission_mode,
+        feature_preprocessor=args.feature_preprocessor,
+        pca_components=args.pca_components,
         max_iter=args.max_iter,
         demean_window=args.demean_window,
+        tune_hyperparameters=args.tune_hyperparameters,
+        tuning_cv_splits=args.tuning_cv_splits,
+        tuning_scoring=args.tuning_scoring,
+        tuning_c_grid=args.tuning_c_grid,
+        tuning_group_column=args.tuning_group_column,
         scan_step=args.scan_step,
         scan_start=args.scan_start,
         scan_stop=args.scan_stop,

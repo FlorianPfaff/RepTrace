@@ -33,6 +33,8 @@ python -m reptrace.mne_time_decode \
   --tmax 0.8 \
   --window-ms 20 \
   --step-ms 10 \
+  --dataset NOD-EEG \
+  --task animate_inanimate \
   --out results/nod_sub-01_animate.csv \
   --observations-out results/nod_sub-01_animate_observations.csv \
   --emission-mode both
@@ -40,6 +42,14 @@ python -m reptrace.mne_time_decode \
 
 The output CSV contains fold-wise accuracy, log loss, Brier score, and expected
 calibration error for each time window.
+
+For probability-driven model selection, tune inside each outer training fold
+with a proper or calibration-oriented probability objective instead of accuracy:
+
+```bash
+python -m reptrace.mne_time_decode ... --tune-hyperparameters --tuning-scoring neg_log_loss
+python -m reptrace.mne_time_decode ... --tune-hyperparameters --tuning-scoring neg_brier
+```
 
 The optional observations CSV keeps the held-out decoder probabilities before
 they are reduced to accuracy or calibration summaries. Each row is one
@@ -157,6 +167,21 @@ python -m reptrace.benchmark \
 
 Manifest paths are resolved relative to the manifest file. The example manifest
 expects staged files under `data/nod/`.
+
+For external-dataset generalization, add stable `dataset` and `task` columns to
+the manifest, for example `NOD-EEG` / `animate_inanimate` or `THINGS-EEG` /
+`object_category`. The benchmark runner propagates these identifiers to each
+fold-level metric row, calibration-bin row, and probability-observation row; the
+results aggregator and provenance table then keep dataset/task combinations
+separate automatically. When every row in a run shares the same identifiers, the
+same metadata can be supplied as command-line defaults instead:
+
+```bash
+python -m reptrace.benchmark benchmarks/things_eeg_object_category.csv \
+  --dataset THINGS-EEG \
+  --task object_category \
+  --out-dir results/things_eeg_object_category
+```
 
 ## Five-Subject Pilot
 

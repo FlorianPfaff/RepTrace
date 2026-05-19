@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
@@ -49,7 +50,7 @@ class ClassifierSpec:
     fits_in_builder: bool = False
 
 
-class CorrelationPrototypeClassifier:
+class CorrelationPrototypeClassifier(ClassifierMixin, BaseEstimator):
     """Classify rows by correlation to class-average feature prototypes."""
 
     def __init__(self):
@@ -78,6 +79,13 @@ class CorrelationPrototypeClassifier:
         if features.ndim != 2:
             raise ValueError("features must be a two-dimensional feature matrix.")
         return self._row_center_normalize(features) @ self.normalized_prototypes_.T
+
+    def predict_proba(self, features: Sequence[Sequence[float]] | np.ndarray) -> np.ndarray:
+        """Return softmax-normalized prototype-correlation probabilities."""
+        scores = self.decision_function(features)
+        shifted = scores - np.max(scores, axis=1, keepdims=True)
+        exp_scores = np.exp(np.clip(shifted, -50.0, 50.0))
+        return exp_scores / exp_scores.sum(axis=1, keepdims=True)
 
     def predict(self, features: Sequence[Sequence[float]] | np.ndarray) -> np.ndarray:
         if self.classes_ is None:

@@ -80,6 +80,12 @@ def test_continuous_stimulus_scan_trains_scans_and_summarizes_events(tmp_path: P
         train_window=(0.10, 0.20),
         picks="eeg",
         decoder="logistic",
+        feature_preprocessor="pca",
+        pca_components=0.95,
+        tune_hyperparameters=True,
+        tuning_cv_splits=2,
+        tuning_scoring="accuracy",
+        tuning_c_grid=(0.1, 1.0),
         max_iter=1000,
         scan_step=0.05,
         scan_start=0.0,
@@ -120,6 +126,11 @@ def test_continuous_stimulus_scan_trains_scans_and_summarizes_events(tmp_path: P
     assert result.observations["sequence_id"].str.contains(":").all()
     assert result.observations["preprocessing_hash"].str.len().eq(16).all()
     assert result.observations["model_hash"].str.len().eq(16).all()
+    assert result.observations["feature_preprocessor"].unique().tolist() == ["pca"]
+    assert result.observations["pca_components"].astype(float).unique().tolist() == [0.95]
+    assert result.observations["tuned_hyperparameters"].unique().tolist() == [True]
+    assert result.observations["tuning_cv_splits"].unique().tolist() == [2]
+    assert result.event_metrics["best_params"].astype(str).str.len().gt(0).all()
     assert validate_probability_observations(result.observations, profile="stimulus-detection").is_valid
     assert result.annotations["stimulus_class"].tolist() == ["A", "A"]
     assert set(result.events["stimulus_class"]) == {"A"}

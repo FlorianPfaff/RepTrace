@@ -116,6 +116,8 @@ reptrace-mne-time-decode \
   --metadata-csv path/to/sub-01_events.csv \
   --label-column stim_is_animate \
   --group-column session \
+  --dataset NOD-EEG \
+  --task animate_inanimate \
   --out results/nod_sub-01_animate.csv \
   --observations-out results/nod_sub-01_animate_observations.csv
 ```
@@ -259,6 +261,15 @@ recommended first task is animate-versus-inanimate decoding from the NOD-EEG
 `stim_is_animate` metadata. The second staged task is superclass decoding
 between `canine` and `device` trials, which keeps the same public dataset and
 reporting workflow while testing a different semantic contrast.
+
+External-dataset generalization runs should add `dataset` and `task` columns to
+their benchmark manifests, or pass `--dataset` and `--task` on the direct
+`reptrace-mne-time-decode` / `reptrace-benchmark` commands. These identifiers
+are written to metric, calibration-bin, and probability-observation CSVs and are
+used as aggregation/provenance grouping columns. This keeps follow-up benchmarks
+such as NOD-EEG, NOD-MEG, THINGS-EEG, and THINGS-MEG from being accidentally
+pooled while still allowing a single summary table to compare the frozen
+pipeline across datasets and semantic contrasts.
 
 THINGS-EEG and THINGS-MEG are natural follow-up benchmarks for larger visual
 object representation experiments. Lab data with task localizers and planning

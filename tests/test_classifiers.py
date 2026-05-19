@@ -126,6 +126,17 @@ def test_correlation_prototype_predicts_by_nearest_class_pattern():
     np.testing.assert_array_equal(predictions, np.array([0, 2]))
 
 
+def test_correlation_prototype_exposes_probability_scores():
+    features = np.array([[1.0, 0.0, 0.0], [1.0, 0.1, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0, 0.1]])
+    labels = np.array([0, 0, 1, 1])
+    model = train_multiclass_classifier(features, labels, "correlation-prototype", None)
+
+    probabilities = model.predict_proba(np.array([[0.9, 0.1, 0.0], [0.0, 0.8, 0.1]]))
+
+    assert probabilities.shape == (2, 2)
+    assert probabilities.sum(axis=1).round(6).tolist() == [1.0, 1.0]
+
+
 def test_shrinkage_lda_accepts_auto_and_numeric_shrinkage(multiclass_data):
     features, labels = multiclass_data
     for classifier_param in ("auto", 0.1, 0.5):

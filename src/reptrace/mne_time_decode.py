@@ -12,7 +12,7 @@ from sklearn.metrics import accuracy_score, log_loss
 from sklearn.preprocessing import LabelEncoder
 
 from reptrace.decoding import (
-    DECODER_CHOICES,
+    DECODER_CLI_CHOICES,
     EMISSION_MODE_CHOICES,
     FEATURE_PREPROCESSOR_CHOICES,
     TUNING_SCORING_CHOICES,
@@ -33,14 +33,27 @@ from reptrace.observations import ProbabilityObservationTable, stable_hash
 
 EMISSION_RUN_CHOICES = (*EMISSION_MODE_CHOICES, "both")
 FEATURE_PREPROCESSOR_RUN_CHOICES = (*FEATURE_PREPROCESSOR_CHOICES, "pca-whiten")
+RESULT_SELECTION_METRIC_CHOICES = ("accuracy", "log_loss", "brier", "ece")
+RESULT_SELECTION_MINIMIZE_METRICS = {"log_loss", "brier", "ece"}
 TimeWindow = tuple[int, int, float]
 TemporalTrainWindow = tuple[float, float]
 
 
-def _add_subject(row: dict, subject: str | None) -> dict:
+def _add_run_context(
+    row: dict,
+    *,
+    subject: str | None = None,
+    dataset: str | None = None,
+    task: str | None = None,
+) -> dict:
+    context: dict[str, object] = {}
+    if dataset is not None:
+        context["dataset"] = dataset
+    if task is not None:
+        context["task"] = task
     if subject is not None:
-        row = {"subject": subject, **row}
-    return row
+        context["subject"] = subject
+    return {**context, **row} if context else row
 
 
 def _load_epochs_and_metadata(
@@ -163,6 +176,15 @@ def _train_window_summary(
     )
 
 
+def _best_time_by_metric(time_summary: pd.DataFrame, metric: str) -> float:
+    """Return the best time index for a metric aggregated over folds."""
+    if metric not in RESULT_SELECTION_METRIC_CHOICES:
+        raise ValueError(f"Unknown selection metric '{metric}'.")
+    if metric in RESULT_SELECTION_MINIMIZE_METRICS:
+        return float(time_summary[metric].idxmin())
+    return float(time_summary[metric].idxmax())
+
+
 def _model_hash(
     *,
     decoder_name: str,
@@ -238,6 +260,8 @@ def _append_decoded_outputs(
     calibration_bins: int,
     observation_out_path: Path | None,
     subject: str | None,
+    dataset: str | None = None,
+    task: str | None = None,
     tuning_metadata: dict[str, object] | None = None,
 ) -> None:
     tuning_metadata = {} if tuning_metadata is None else tuning_metadata
@@ -270,7 +294,7 @@ def _append_decoded_outputs(
         "class_names": "|".join(map(str, class_names)),
     }
     row.update(tuning_metadata)
-    rows.append(_add_subject(row, subject))
+    rows.append(_add_run_context(row, subject=subject, dataset=dataset, task=task))
 
     if calibration_out_path is not None:
         for bin_row in reliability_bins(probabilities, test_labels, n_bins=calibration_bins):
@@ -294,7 +318,7 @@ def _append_decoded_outputs(
                 **bin_row,
             }
             calibration_row.update(tuning_metadata)
-            calibration_rows.append(_add_subject(calibration_row, subject))
+            calibration_rows.append(_add_run_context(calibration_row, subject=subject, dataset=dataset, task=task))
     if observation_out_path is not None:
         for local_position, filtered_index in enumerate(test_idx):
             true_label = int(test_labels[local_position])
@@ -339,7 +363,7 @@ def _append_decoded_outputs(
             for class_index, class_name in enumerate(class_names):
                 observation[f"class_{class_index}"] = str(class_name)
                 observation[f"prob_class_{class_index}"] = float(probabilities[local_position, class_index])
-            observation_rows.append(_add_subject(observation, subject))
+            observation_rows.append(_add_run_context(observation, subject=subject, dataset=dataset, task=task))
 
 
 def run_time_resolved_decode(
@@ -368,6 +392,8 @@ def run_time_resolved_decode(
     calibration_bins: int = 10,
     observation_out_path: Path | None = None,
     subject: str | None = None,
+    dataset: str | None = None,
+    task: str | None = None,
     temporal_train_window: tuple[float, float] | None = None,
 ) -> pd.DataFrame:
     """Run time-resolved decoding on an MNE epochs file and save metrics as CSV.
@@ -540,6 +566,8 @@ def run_time_resolved_decode(
                         calibration_bins=calibration_bins,
                         observation_out_path=observation_out_path,
                         subject=subject,
+                        dataset=dataset,
+                        task=task,
                         tuning_metadata=tuning_metadata,
                     )
     else:
@@ -645,6 +673,8 @@ def run_time_resolved_decode(
                         calibration_bins=calibration_bins,
                         observation_out_path=observation_out_path,
                         subject=subject,
+                        dataset=dataset,
+                        task=task,
                         tuning_metadata=tuning_metadata,
                     )
 
@@ -663,6 +693,8 @@ def run_time_resolved_decode(
                 "calibration_fold": "",
                 "preprocessing_hash": preprocessing_hash,
                 "model_hash": default_model_hash,
+                "dataset": "" if dataset is None else dataset,
+                "task": "" if task is None else task,
             }
         ).to_csv(observation_out_path)
     return results
@@ -684,7 +716,7 @@ def main() -> None:
     parser.add_argument("--step-ms", type=float, default=10.0)
     parser.add_argument("--n-splits", type=int, default=5)
     parser.add_argument("--max-iter", type=int, default=1000)
-    parser.add_argument("--decoder", choices=DECODER_CHOICES, default="logistic")
+    parser.add_argument("--decoder", choices=DECODER_CLI_CHOICES, default="logistic")
     parser.add_argument("--emission-mode", choices=EMISSION_RUN_CHOICES, default="calibrated")
     parser.add_argument("--feature-preprocessor", choices=FEATURE_PREPROCESSOR_RUN_CHOICES, default="none")
     parser.add_argument(
@@ -694,6 +726,7 @@ def main() -> None:
     parser.add_argument("--tune-hyperparameters", action="store_true", help="Use nested inner-CV hyperparameter selection inside each outer train fold.")
     parser.add_argument("--tuning-cv-splits", type=int, default=3, help="Maximum number of inner CV folds for --tune-hyperparameters.")
     parser.add_argument("--tuning-scoring", choices=TUNING_SCORING_CHOICES, default="accuracy", help="Inner-CV objective for --tune-hyperparameters.")
+    parser.add_argument("--selection-metric", choices=RESULT_SELECTION_METRIC_CHOICES, default="accuracy", help="Metric used only for the console 'best time' summary.")
     parser.add_argument(
         "--tuning-c-grid",
         default=",".join(str(value) for value in parse_c_grid(None)),
@@ -703,6 +736,8 @@ def main() -> None:
     parser.add_argument("--calibration-bins", type=int, default=10)
     parser.add_argument("--observations-out", type=Path, help="Optional held-out trial/time probability observation CSV.")
     parser.add_argument("--subject", help="Optional subject identifier to include in output CSVs.")
+    parser.add_argument("--dataset", help="Optional dataset identifier to include in metrics and probability observations.")
+    parser.add_argument("--task", help="Optional task or contrast identifier to include in metrics and probability observations.")
     parser.add_argument(
         "--temporal-train-window",
         nargs=2,
@@ -740,6 +775,8 @@ def main() -> None:
         calibration_bins=args.calibration_bins,
         observation_out_path=args.observations_out,
         subject=args.subject,
+        dataset=args.dataset,
+        task=args.task,
         temporal_train_window=tuple(args.temporal_train_window) if args.temporal_train_window is not None else None,
     )
     print(f"Wrote {args.out}")
@@ -747,8 +784,13 @@ def main() -> None:
         print(f"Wrote probability observations: {args.observations_out}")
     for emission_mode_name, summary in results.groupby("emission_mode", sort=True):
         time_summary = summary.groupby("time")[["accuracy", "log_loss", "brier", "ece"]].mean()
-        best_time = time_summary["accuracy"].idxmax()
-        print(f"Best {emission_mode_name} mean accuracy: {time_summary.loc[best_time, 'accuracy']:.3f} at {best_time:.3f}s")
+        best_time = _best_time_by_metric(time_summary, args.selection_metric)
+        best_value = time_summary.loc[best_time, args.selection_metric]
+        direction = "lowest" if args.selection_metric in RESULT_SELECTION_MINIMIZE_METRICS else "highest"
+        print(
+            f"Best {emission_mode_name} mean {args.selection_metric} "
+            f"({direction}): {best_value:.3f} at {best_time:.3f}s"
+        )
 
 
 if __name__ == "__main__":

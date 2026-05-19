@@ -96,6 +96,27 @@ def test_aggregate_time_decode_results_keeps_emission_modes_separate():
     assert aggregated["accuracy_mean"].round(3).tolist() == [0.7, 0.8, 0.8, 0.9]
 
 
+def test_aggregate_time_decode_results_keeps_external_datasets_and_tasks_separate():
+    nod = _result_frame("s1")
+    nod["dataset"] = "NOD-EEG"
+    nod["task"] = "animate_inanimate"
+    things = _result_frame("s1", offset=0.05)
+    things["dataset"] = "THINGS-EEG"
+    things["task"] = "object_category"
+
+    aggregated = aggregate_time_decode_results(pd.concat([nod, things], ignore_index=True))
+    summary = aggregated[["dataset", "task", "time", "accuracy_mean"]].sort_values(["dataset", "task", "time"])
+
+    assert summary["dataset"].tolist() == ["NOD-EEG", "NOD-EEG", "THINGS-EEG", "THINGS-EEG"]
+    assert summary["task"].tolist() == [
+        "animate_inanimate",
+        "animate_inanimate",
+        "object_category",
+        "object_category",
+    ]
+    assert summary["accuracy_mean"].round(3).tolist() == [0.7, 0.8, 0.75, 0.85]
+
+
 def test_aggregate_time_decode_results_keeps_preprocessing_and_tuning_separate():
     baseline = _result_frame("s1")
     baseline["decoder"] = "logistic"

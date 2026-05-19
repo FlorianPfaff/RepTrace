@@ -31,6 +31,8 @@ __all__ = [
 
 METRIC_COLUMNS = ("accuracy", "log_loss", "brier", "ece")
 SUMMARY_GROUP_COLUMNS = (
+    "dataset",
+    "task",
     "decoder",
     "emission_mode",
     "feature_preprocessor",
@@ -51,6 +53,8 @@ DEFAULT_ECE_BINS = 10
 PROVENANCE_METRICS = ("accuracy", "log_loss", "brier", "ece")
 LOWER_IS_BETTER_METRICS = {"log_loss", "brier", "ece"}
 GROUP_COLUMN_DEFAULTS = {
+    "dataset": "unspecified",
+    "task": "unspecified",
     "emission_mode": "calibrated",
     "feature_preprocessor": "none",
     "pca_components": "",
@@ -67,6 +71,8 @@ GROUP_COLUMN_DEFAULTS = {
 }
 
 PROVENANCE_COLUMN_ORDER = (
+    "dataset",
+    "task",
     "decoder",
     "emission_mode",
     "pca_mode",

@@ -3,12 +3,15 @@ import pytest
 
 from reptrace.decoding import (
     DECODER_CHOICES,
+    DECODER_CLI_CHOICES,
+    TUNING_SCORING_CHOICES,
     make_cross_validator,
     make_decoder,
     make_tuning_cross_validator,
     normalize_decoder_name,
     normalize_feature_preprocessor,
     normalize_pca_components,
+    normalize_tuning_scoring,
     parse_c_grid,
     predict_emission_probabilities,
     score_to_probabilities,
@@ -56,6 +59,24 @@ def test_make_decoder_produces_probabilities_for_standard_decoders():
         model.fit(features, labels)
         probabilities = model.predict_proba(features[:3])
         assert probabilities.shape == (3, 2)
+
+
+def test_make_decoder_exposes_registry_decoders_as_probability_decoders():
+    rng = np.random.default_rng(23)
+    features = rng.normal(size=(36, 5))
+    labels = np.array([0, 1, 2] * 12)
+
+    for decoder in ("correlation_prototype", "multinomial_logistic", "multiclass_svm_weighted"):
+        model = make_decoder(decoder, max_iter=2000)
+        model.fit(features, labels)
+        probabilities = predict_emission_probabilities(model, features[:4])
+        assert probabilities.shape == (4, 3)
+        assert probabilities.sum(axis=1).round(6).tolist() == [1.0] * 4
+
+
+def test_decoder_cli_choices_accept_hyphenated_registry_names():
+    assert "correlation-prototype" in DECODER_CLI_CHOICES
+    assert normalize_decoder_name("correlation-prototype") == "correlation_prototype"
 
 
 def test_make_decoder_fits_pca_inside_probability_pipeline():
@@ -122,6 +143,35 @@ def test_make_decoder_can_tune_regularization_with_inner_cv():
 
     assert probabilities.shape == (3, 2)
     assert model.best_params_["logisticregression__C"] in {0.1, 1.0}
+
+
+def test_normalize_tuning_scoring_accepts_probability_quality_objectives():
+    assert "neg_brier" in TUNING_SCORING_CHOICES
+    assert "neg_ece" in TUNING_SCORING_CHOICES
+    assert normalize_tuning_scoring("neg-brier") == "neg_brier"
+    assert normalize_tuning_scoring("neg-ece") == "neg_ece"
+
+
+@pytest.mark.parametrize("scoring", ["neg_log_loss", "neg_brier", "neg_ece"])
+def test_tuned_decoder_can_optimize_probability_quality_objectives(scoring):
+    rng = np.random.default_rng(23)
+    features = rng.normal(size=(36, 6))
+    labels = np.array(["cat", "dog", "owl"] * 12)
+
+    model = make_decoder(
+        "logistic",
+        max_iter=3000,
+        tune_hyperparameters=True,
+        tuning_cv=3,
+        tuning_scoring=scoring,
+        tuning_c_grid=(0.1, 1.0),
+    )
+    model.fit(features, labels)
+    probabilities = model.predict_proba(features[:5])
+
+    assert probabilities.shape == (5, 3)
+    assert np.isfinite(model.best_score_)
+    assert model.best_score_ <= 0.0
 
 
 def test_tuned_lda_compares_svd_and_shrinkage_variants():

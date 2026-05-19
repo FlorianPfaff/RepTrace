@@ -13,7 +13,7 @@ from reptrace.plot_time_decode import plot_time_decode_results
 from reptrace.results import aggregate_time_decode_csvs, write_provenance_table
 from reptrace.temporal_smoothing import DEFAULT_EMISSION_SUFFIX, DEFAULT_FIT_WINDOW, smooth_probability_observations
 from reptrace.decoding import (
-    DECODER_CHOICES,
+    DECODER_CLI_CHOICES,
     EMISSION_MODE_CHOICES,
     FEATURE_PREPROCESSOR_CHOICES,
     TUNING_SCORING_CHOICES,
@@ -129,6 +129,8 @@ def _output_stem(
     subject: str,
     decoder: str,
     emission_mode: str,
+    dataset: str | None = None,
+    task: str | None = None,
     *,
     has_decoder_column: bool,
     has_emission_mode_column: bool,
@@ -143,8 +145,15 @@ def _output_stem(
     has_tune_hyperparameters_column: bool = False,
     has_tuning_scoring_column: bool = False,
     has_temporal_train_window_column: bool = False,
+    has_dataset_column: bool = False,
+    has_task_column: bool = False,
 ) -> str:
-    parts = [subject]
+    parts = []
+    if has_dataset_column and dataset is not None:
+        parts.append(_safe_name(dataset))
+    if has_task_column and task is not None:
+        parts.append(_safe_name(task))
+    parts.append(subject)
     if variant is not None:
         parts.append(_safe_name(variant))
         return "_".join(parts)
@@ -214,6 +223,8 @@ def run_benchmark_manifest(
     default_n_splits: int = 5,
     default_max_iter: int = 1000,
     default_decoder: str = "logistic",
+    default_dataset: str | None = None,
+    default_task: str | None = None,
     default_emission_mode: str = "calibrated",
     default_feature_preprocessor: str = "none",
     default_pca_components: str | None = None,
@@ -250,6 +261,8 @@ def run_benchmark_manifest(
         if subject is None:
             raise ValueError("Manifest contains a row with an empty subject.")
 
+        dataset = _string_value(row, "dataset", default_dataset)
+        task = _string_value(row, "task", default_task)
         label_column = _string_value(row, "label_column", default_label_column)
         if label_column is None:
             raise ValueError(f"Subject '{subject}' has no label column.")
@@ -272,6 +285,8 @@ def run_benchmark_manifest(
             subject,
             decoder,
             emission_mode,
+            dataset=dataset,
+            task=task,
             has_decoder_column="decoder" in manifest.columns,
             has_emission_mode_column="emission_mode" in manifest.columns,
             variant=_string_value(row, "variant"),
@@ -289,6 +304,8 @@ def run_benchmark_manifest(
                     manifest.columns
                 )
             ),
+            has_dataset_column="dataset" in manifest.columns or default_dataset is not None,
+            has_task_column="task" in manifest.columns or default_task is not None,
         )
 
         output_csv = _resolve_path(_string_value(row, "out_csv"), manifest_dir)
@@ -342,6 +359,8 @@ def run_benchmark_manifest(
             calibration_bins=_int_value(row, "calibration_bins", calibration_bins),
             observation_out_path=observation_out_csv,
             subject=subject,
+            dataset=dataset,
+            task=task,
         )
         if calibration_out_csv is not None:
             calibration_csvs.append(calibration_out_csv)
@@ -436,7 +455,9 @@ def main() -> None:
     parser.add_argument("--step-ms", type=float, default=10.0)
     parser.add_argument("--n-splits", type=int, default=5)
     parser.add_argument("--max-iter", type=int, default=1000)
-    parser.add_argument("--decoder", choices=DECODER_CHOICES, default="logistic")
+    parser.add_argument("--decoder", choices=DECODER_CLI_CHOICES, default="logistic")
+    parser.add_argument("--dataset", help="Default dataset identifier for manifest rows without a dataset column.")
+    parser.add_argument("--task", help="Default task or contrast identifier for manifest rows without a task column.")
     parser.add_argument("--emission-mode", choices=EMISSION_RUN_CHOICES, default="calibrated")
     parser.add_argument("--feature-preprocessor", choices=(*FEATURE_PREPROCESSOR_CHOICES, "pca-whiten"), default="none")
     parser.add_argument("--pca-components")
@@ -481,6 +502,8 @@ def main() -> None:
         default_n_splits=args.n_splits,
         default_max_iter=args.max_iter,
         default_decoder=args.decoder,
+        default_dataset=args.dataset,
+        default_task=args.task,
         default_emission_mode=args.emission_mode,
         default_feature_preprocessor=args.feature_preprocessor,
         default_pca_components=args.pca_components,
