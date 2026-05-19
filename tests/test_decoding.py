@@ -89,7 +89,7 @@ def test_sparse_logistic_uses_l1_saga_regularization():
     assert probabilities.shape == (3, 2)
 
 
-def test_elastic_net_logistic_uses_saga_mixed_penalty():
+def test_elastic_net_logistic_uses_saga_with_default_l1_ratio():
     rng = np.random.default_rng(13)
     features = rng.normal(size=(30, 6))
     labels = np.array([0, 1] * 15)
