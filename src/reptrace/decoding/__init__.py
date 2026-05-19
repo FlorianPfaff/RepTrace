@@ -9,6 +9,7 @@ from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import GridSearchCV, StratifiedGroupKFold, StratifiedKFold
+from sklearn.naive_bayes import GaussianNB
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
@@ -22,11 +23,12 @@ from reptrace.decoding.sampling import (
     select_class_limited_indices as select_class_limited_indices,
 )
 
-DECODER_CHOICES = ("logistic", "lda", "shrinkage_lda", "linear_svm")
+DECODER_CHOICES = ("logistic", "gaussian_nb", "lda", "shrinkage_lda", "linear_svm")
 EMISSION_MODE_CHOICES = ("calibrated", "uncalibrated")
 FEATURE_PREPROCESSOR_CHOICES = ("none", "pca", "pca_whiten")
 TUNING_SCORING_CHOICES = ("accuracy", "balanced_accuracy", "neg_log_loss")
 DEFAULT_TUNING_C_GRID = (0.01, 0.1, 1.0, 10.0, 100.0)
+DEFAULT_TUNING_VAR_SMOOTHING_GRID = (1e-12, 1e-10, 1e-9, 1e-8, 1e-6)
 
 
 def make_logistic_decoder(
@@ -92,6 +94,12 @@ def make_decoder(
                 solver="lbfgs",
             ),
         )
+    if normalized == "gaussian_nb":
+        return make_pipeline(
+            StandardScaler(),
+            *feature_steps,
+            GaussianNB(),
+        )
     if normalized == "lda":
         return make_pipeline(
             StandardScaler(),
@@ -136,7 +144,7 @@ def make_tuned_decoder(
     """Create a decoder with inner-CV hyperparameter selection.
 
     Logistic regression and linear SVM tune the regularization strength ``C``.
-    LDA compares the default SVD solver with shrinkage LDA
+    Gaussian NB tunes variance smoothing. LDA compares the default SVD solver with shrinkage LDA
     (``solver='lsqr', shrinkage='auto'``), which is often better conditioned for
     high-dimensional M/EEG windows.
     """
@@ -157,6 +165,13 @@ def make_tuned_decoder(
             ),
         )
         param_grid = {"logisticregression__C": c_grid}
+    elif normalized == "gaussian_nb":
+        estimator = make_pipeline(
+            StandardScaler(),
+            *feature_steps,
+            GaussianNB(),
+        )
+        param_grid = {"gaussiannb__var_smoothing": DEFAULT_TUNING_VAR_SMOOTHING_GRID}
     elif normalized == "lda":
         estimator = make_pipeline(
             StandardScaler(),
@@ -251,6 +266,8 @@ def normalize_tuning_scoring(scoring: str) -> str:
 def normalize_decoder_name(name: str) -> str:
     """Normalize decoder aliases to the names used in result tables."""
     normalized = name.lower().replace("-", "_")
+    if normalized in {"nb", "naive_bayes", "gaussian_naive_bayes"}:
+        return "gaussian_nb"
     if normalized == "svm":
         return "linear_svm"
     if normalized in {"lda_shrinkage", "shrinkage_lda", "shrinkagelda"}:

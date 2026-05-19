@@ -72,6 +72,20 @@ def test_make_decoder_fits_pca_inside_probability_pipeline():
     assert probabilities.sum(axis=1).round(6).tolist() == [1.0] * 5
 
 
+def test_gaussian_nb_produces_probabilities():
+    rng = np.random.default_rng(23)
+    features = rng.normal(size=(30, 8))
+    labels = np.array([0, 1] * 15)
+
+    model = make_decoder("naive-bayes")
+    model.fit(features, labels)
+    probabilities = model.predict_proba(features[:3])
+
+    assert model.named_steps["gaussiannb"].var_smoothing == 1e-9
+    assert probabilities.shape == (3, 2)
+    assert probabilities.sum(axis=1).round(6).tolist() == [1.0, 1.0, 1.0]
+
+
 def test_make_decoder_accepts_pca_whiten_alias_and_fractional_components():
     rng = np.random.default_rng(13)
     features = rng.normal(size=(40, 8))
@@ -162,6 +176,18 @@ def test_tuned_shrinkage_lda_selects_shrinkage_strength():
     assert model.predict_proba(features[:3]).shape == (3, 2)
 
 
+def test_tuned_gaussian_nb_selects_var_smoothing():
+    rng = np.random.default_rng(29)
+    features = rng.normal(size=(30, 8))
+    labels = np.array([0, 1] * 15)
+
+    model = make_decoder("gaussian-nb", tune_hyperparameters=True, tuning_cv=2)
+    model.fit(features, labels)
+
+    assert "gaussiannb__var_smoothing" in model.best_params_
+    assert model.predict_proba(features[:3]).shape == (3, 2)
+
+
 def test_parse_c_grid_accepts_comma_separated_values():
     assert parse_c_grid("0.1,1,10") == (0.1, 1.0, 10.0)
 
@@ -187,5 +213,6 @@ def test_score_to_probabilities_handles_binary_scores():
 
 
 def test_normalize_decoder_name_accepts_svm_alias():
+    assert normalize_decoder_name("naive-bayes") == "gaussian_nb"
     assert normalize_decoder_name("svm") == "linear_svm"
     assert normalize_decoder_name("lda-shrinkage") == "shrinkage_lda"
