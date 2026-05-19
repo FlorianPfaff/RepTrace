@@ -22,7 +22,7 @@ from reptrace.decoding.sampling import (
     select_class_limited_indices as select_class_limited_indices,
 )
 
-DECODER_CHOICES = ("logistic", "lda", "linear_svm")
+DECODER_CHOICES = ("logistic", "sparse_logistic", "lda", "linear_svm")
 EMISSION_MODE_CHOICES = ("calibrated", "uncalibrated")
 FEATURE_PREPROCESSOR_CHOICES = ("none", "pca", "pca_whiten")
 TUNING_SCORING_CHOICES = ("accuracy", "balanced_accuracy", "neg_log_loss")
@@ -92,6 +92,18 @@ def make_decoder(
                 solver="lbfgs",
             ),
         )
+    if normalized == "sparse_logistic":
+        return make_pipeline(
+            StandardScaler(),
+            *feature_steps,
+            LogisticRegression(
+                class_weight="balanced",
+                l1_ratio=1.0,
+                max_iter=max_iter,
+                random_state=13,
+                solver="saga",
+            ),
+        )
     if normalized == "lda":
         return make_pipeline(
             StandardScaler(),
@@ -129,8 +141,8 @@ def make_tuned_decoder(
 ):
     """Create a decoder with inner-CV hyperparameter selection.
 
-    Logistic regression and linear SVM tune the regularization strength ``C``.
-    LDA compares the default SVD solver with shrinkage LDA
+    Logistic regression, sparse logistic regression, and linear SVM tune the
+    regularization strength ``C``. LDA compares the default SVD solver with shrinkage LDA
     (``solver='lsqr', shrinkage='auto'``), which is often better conditioned for
     high-dimensional M/EEG windows.
     """
@@ -148,6 +160,19 @@ def make_tuned_decoder(
                 class_weight="balanced",
                 max_iter=max_iter,
                 solver="lbfgs",
+            ),
+        )
+        param_grid = {"logisticregression__C": c_grid}
+    elif normalized == "sparse_logistic":
+        estimator = make_pipeline(
+            StandardScaler(),
+            *feature_steps,
+            LogisticRegression(
+                class_weight="balanced",
+                l1_ratio=1.0,
+                max_iter=max_iter,
+                random_state=13,
+                solver="saga",
             ),
         )
         param_grid = {"logisticregression__C": c_grid}
@@ -240,6 +265,8 @@ def normalize_decoder_name(name: str) -> str:
     normalized = name.lower().replace("-", "_")
     if normalized == "svm":
         return "linear_svm"
+    if normalized in {"l1_logistic", "logistic_l1", "sparse_logreg"}:
+        return "sparse_logistic"
     if normalized not in DECODER_CHOICES:
         raise ValueError(f"Unknown decoder '{name}'. Available decoders: {', '.join(DECODER_CHOICES)}.")
     return normalized

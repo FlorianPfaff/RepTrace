@@ -354,6 +354,7 @@ RepTrace supports standard probability-producing decoders with the `decoder`
 manifest column or `--decoder` CLI option:
 
 - `logistic`: balanced multinomial logistic regression;
+- `sparse_logistic`: L1-regularized balanced logistic regression with the SAGA solver;
 - `lda`: linear discriminant analysis;
 - `linear_svm`: calibrated balanced linear support vector machine.
 
@@ -437,6 +438,20 @@ those same observations, writes smoothed posterior metrics, and aggregates raw
 and smoothed rows into the same summary. The comparison appears as
 `emission_mode=calibrated` versus
 `emission_mode=calibrated_temporal_posterior`.
+
+Run the sparse logistic variant when dense logistic regression may be using too
+many noisy sensor-time features:
+
+```bash
+python -m reptrace.benchmark \
+  benchmarks/nod_animate_sparse_logistic_all.csv \
+  --out-dir results/nod_animate_sparse_logistic_all \
+  --aggregate-out results/nod_animate_sparse_logistic_all/summary.csv \
+  --plot-out results/nod_animate_sparse_logistic_all/summary.png \
+  --calibration-dir results/nod_animate_sparse_logistic_all/calibration \
+  --chance 0.5 \
+  --resume
+```
 
 Generate a decoder comparison report:
 
@@ -538,6 +553,18 @@ gh workflow run nod-decoder-all.yml \
   -f temporal_smoothing_fit_window_start=0.1 \
   -f temporal_smoothing_fit_window_stop=0.8 \
   -f temporal_smoothing_stay_grid_size=200 \
+  -f n_permutations=10000
+```
+
+Or run the sparse logistic L1 decoder:
+
+```bash
+gh workflow run nod-decoder-all.yml \
+  --repo IPS-Stuttgart/RepTrace \
+  --ref main \
+  -f data_root=../data/nod \
+  -f manifest_csv=benchmarks/nod_animate_sparse_logistic_all.csv \
+  -f output_dir=results/nod_animate_sparse_logistic_all \
   -f n_permutations=10000
 ```
 
