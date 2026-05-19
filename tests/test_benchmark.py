@@ -24,6 +24,7 @@ def _fake_decode(**kwargs):
             "tuning_cv_splits": [kwargs.get("tuning_cv_splits", "") if tuned else ""] * 2,
             "tuning_scoring": [kwargs.get("tuning_scoring", "") if tuned else ""] * 2,
             "tuning_c_grid": [kwargs.get("tuning_c_grid", "") if tuned else ""] * 2,
+            "tuning_pca_components_grid": [kwargs.get("tuning_pca_components_grid", "") if tuned else ""] * 2,
             "best_params": [best_params] * 2,
             "best_score": [0.71 if tuned else ""] * 2,
             "temporal_mode": [temporal_mode, temporal_mode],
@@ -53,6 +54,7 @@ def _fake_decode(**kwargs):
                 "tuning_cv_splits": [kwargs.get("tuning_cv_splits", "") if tuned else ""],
                 "tuning_scoring": [kwargs.get("tuning_scoring", "") if tuned else ""],
                 "tuning_c_grid": [kwargs.get("tuning_c_grid", "") if tuned else ""],
+                "tuning_pca_components_grid": [kwargs.get("tuning_pca_components_grid", "") if tuned else ""],
                 "best_params": [best_params],
                 "best_score": [0.71 if tuned else ""],
                 "temporal_mode": [temporal_mode],
@@ -309,8 +311,8 @@ def test_run_benchmark_manifest_supports_emission_mode_column(tmp_path: Path, mo
 def test_run_benchmark_manifest_supports_tuned_pca_whiten_variant(tmp_path: Path, monkeypatch):
     manifest = tmp_path / "manifest.csv"
     manifest.write_text(
-        "subject,epochs,metadata_csv,label_column,decoder,feature_preprocessor,pca_components,tune_hyperparameters,tuning_cv_splits,tuning_scoring,tuning_c_grid\n"
-        "sub-01,data/sub-01_epo.fif,data/sub-01_metadata.csv,condition,logistic,pca-whiten,0.95,true,2,balanced_accuracy,\"0.1,1,10\"\n",
+        "subject,epochs,metadata_csv,label_column,decoder,feature_preprocessor,pca_components,tune_hyperparameters,tuning_cv_splits,tuning_scoring,tuning_c_grid,tuning_pca_components_grid\n"
+        "sub-01,data/sub-01_epo.fif,data/sub-01_metadata.csv,condition,logistic,pca-whiten,0.95,true,2,balanced_accuracy,\"0.1,1,10\",\"none,0.8,0.95\"\n",
         encoding="utf-8",
     )
     calls = []
@@ -329,13 +331,15 @@ def test_run_benchmark_manifest_supports_tuned_pca_whiten_variant(tmp_path: Path
     assert calls[0]["tuning_cv_splits"] == 2
     assert calls[0]["tuning_scoring"] == "balanced_accuracy"
     assert calls[0]["tuning_c_grid"] == "0.1,1,10"
-    assert run.result_csvs[0].name == "sub-01_logistic_pca_whiten_pca0p95_tuned_balanced_accuracy_time_decode.csv"
+    assert calls[0]["tuning_pca_components_grid"] == "none,0.8,0.95"
+    assert run.result_csvs[0].name == "sub-01_logistic_pca_whiten_pca0p95_tuned_balanced_accuracy_pcagridnone_0p8_0p95_time_decode.csv"
     summary = pd.read_csv(run.aggregate_csv)
     assert summary["feature_preprocessor"].unique().tolist() == ["pca_whiten"]
     assert summary["tuned_hyperparameters"].unique().tolist() == [True]
     provenance = pd.read_csv(run.provenance_csv)
     assert provenance["pca_mode"].tolist() == ["pca_whiten"]
     assert provenance["tuning_c_grid"].tolist() == ["0.1,1,10"]
+    assert provenance["tuning_pca_components_grid"].tolist() == ["none,0.8,0.95"]
     assert provenance["selected_params"].str.contains("logisticregression__C", regex=False).all()
     assert provenance["selected_accuracy"].round(3).tolist() == [0.7]
 

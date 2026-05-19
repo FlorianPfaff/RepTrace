@@ -13,7 +13,7 @@ from reptrace.plot_time_decode import plot_time_decode_results
 from reptrace.results import aggregate_time_decode_csvs, write_provenance_table
 from reptrace.temporal_smoothing import DEFAULT_EMISSION_SUFFIX, DEFAULT_FIT_WINDOW, smooth_probability_observations
 from reptrace.decoding import (
-    DECODER_CHOICES,
+    DECODER_CLI_CHOICES,
     EMISSION_MODE_CHOICES,
     FEATURE_PREPROCESSOR_CHOICES,
     TUNING_SCORING_CHOICES,
@@ -22,6 +22,7 @@ from reptrace.decoding import (
     normalize_feature_preprocessor,
     normalize_tuning_scoring,
     parse_c_grid,
+    parse_pca_components_grid,
 )
 
 EMISSION_RUN_CHOICES = (*EMISSION_MODE_CHOICES, "both")
@@ -114,7 +115,7 @@ def _required_path(row: pd.Series, column: str, base_dir: Path) -> Path:
 
 
 def _safe_name(value: str) -> str:
-    return value.lower().replace("-", "_").replace(" ", "_").replace(".", "p").replace("|", "_")
+    return value.lower().replace("-", "_").replace(" ", "_").replace(".", "p").replace(",", "_").replace("|", "_")
 
 
 def _safe_window_name(window: TemporalTrainWindow) -> str:
@@ -137,11 +138,13 @@ def _output_stem(
     pca_components: str | None = None,
     tune_hyperparameters: bool = False,
     tuning_scoring: str = "accuracy",
+    tuning_pca_components_grid: str | None = None,
     temporal_train_window: TemporalTrainWindow | None = None,
     has_feature_preprocessor_column: bool = False,
     has_pca_components_column: bool = False,
     has_tune_hyperparameters_column: bool = False,
     has_tuning_scoring_column: bool = False,
+    has_tuning_pca_components_grid_column: bool = False,
     has_temporal_train_window_column: bool = False,
 ) -> str:
     parts = [subject]
@@ -160,6 +163,8 @@ def _output_stem(
         parts.append("tuned" if tune_hyperparameters else "untuned")
     if has_tuning_scoring_column and tune_hyperparameters:
         parts.append(_safe_name(tuning_scoring))
+    if has_tuning_pca_components_grid_column and tune_hyperparameters and tuning_pca_components_grid is not None:
+        parts.append(f"pcagrid{_safe_name(str(tuning_pca_components_grid))}")
     if has_temporal_train_window_column and temporal_train_window is not None:
         parts.append(_safe_window_name(temporal_train_window))
     return "_".join(parts)
@@ -221,6 +226,7 @@ def run_benchmark_manifest(
     default_tuning_cv_splits: int = 3,
     default_tuning_scoring: str = "accuracy",
     default_tuning_c_grid: str | None = None,
+    default_tuning_pca_components_grid: str | None = None,
     default_temporal_train_window: TemporalTrainWindow | None = None,
     calibration_dir: Path | None = None,
     calibration_bins: int = 10,
@@ -267,6 +273,7 @@ def run_benchmark_manifest(
             _string_value(row, "tuning_scoring", default_tuning_scoring) or default_tuning_scoring
         )
         tuning_c_grid = _string_value(row, "tuning_c_grid", default_tuning_c_grid)
+        tuning_pca_components_grid = _string_value(row, "tuning_pca_components_grid", default_tuning_pca_components_grid)
         temporal_train_window = _temporal_train_window_value(row, default_temporal_train_window)
         output_stem = _output_stem(
             subject,
@@ -279,11 +286,13 @@ def run_benchmark_manifest(
             pca_components=pca_components,
             tune_hyperparameters=tune_hyperparameters,
             tuning_scoring=tuning_scoring,
+            tuning_pca_components_grid=tuning_pca_components_grid,
             temporal_train_window=temporal_train_window,
             has_feature_preprocessor_column="feature_preprocessor" in manifest.columns,
             has_pca_components_column="pca_components" in manifest.columns,
             has_tune_hyperparameters_column="tune_hyperparameters" in manifest.columns,
             has_tuning_scoring_column="tuning_scoring" in manifest.columns,
+            has_tuning_pca_components_grid_column="tuning_pca_components_grid" in manifest.columns,
             has_temporal_train_window_column=bool(
                 {"temporal_train_window", "temporal_train_window_start", "temporal_train_window_stop"}.intersection(
                     manifest.columns
@@ -337,6 +346,7 @@ def run_benchmark_manifest(
             tuning_cv_splits=tuning_cv_splits,
             tuning_scoring=tuning_scoring,
             tuning_c_grid=tuning_c_grid,
+            tuning_pca_components_grid=tuning_pca_components_grid,
             temporal_train_window=temporal_train_window,
             calibration_out_path=calibration_out_csv,
             calibration_bins=_int_value(row, "calibration_bins", calibration_bins),
@@ -436,7 +446,7 @@ def main() -> None:
     parser.add_argument("--step-ms", type=float, default=10.0)
     parser.add_argument("--n-splits", type=int, default=5)
     parser.add_argument("--max-iter", type=int, default=1000)
-    parser.add_argument("--decoder", choices=DECODER_CHOICES, default="logistic")
+    parser.add_argument("--decoder", choices=DECODER_CLI_CHOICES, default="logistic")
     parser.add_argument("--emission-mode", choices=EMISSION_RUN_CHOICES, default="calibrated")
     parser.add_argument("--feature-preprocessor", choices=(*FEATURE_PREPROCESSOR_CHOICES, "pca-whiten"), default="none")
     parser.add_argument("--pca-components")
@@ -444,6 +454,13 @@ def main() -> None:
     parser.add_argument("--tuning-cv-splits", type=int, default=3)
     parser.add_argument("--tuning-scoring", choices=TUNING_SCORING_CHOICES, default="accuracy")
     parser.add_argument("--tuning-c-grid", default=",".join(str(value) for value in parse_c_grid(None)))
+    parser.add_argument(
+        "--tuning-pca-components-grid",
+        help=(
+            "Comma-separated PCA component candidates for nested tuning when PCA preprocessing is enabled. "
+            f"Default if omitted with PCA tuning: {','.join('none' if value is None else str(value) for value in parse_pca_components_grid(None))}."
+        ),
+    )
     parser.add_argument("--temporal-train-window", type=float, nargs=2, metavar=("START", "STOP"))
     parser.add_argument("--calibration-dir", type=Path)
     parser.add_argument("--calibration-bins", type=int, default=10)
@@ -488,6 +505,7 @@ def main() -> None:
         default_tuning_cv_splits=args.tuning_cv_splits,
         default_tuning_scoring=args.tuning_scoring,
         default_tuning_c_grid=args.tuning_c_grid,
+        default_tuning_pca_components_grid=args.tuning_pca_components_grid,
         default_temporal_train_window=tuple(args.temporal_train_window) if args.temporal_train_window is not None else None,
         calibration_dir=args.calibration_dir,
         calibration_bins=args.calibration_bins,

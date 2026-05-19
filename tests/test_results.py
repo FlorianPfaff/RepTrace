@@ -151,6 +151,7 @@ def test_build_provenance_table_records_config_params_and_metrics():
     tuned["tuning_cv_splits"] = 2
     tuned["tuning_scoring"] = "balanced_accuracy"
     tuned["tuning_c_grid"] = "0.1|1.0|10.0"
+    tuned["tuning_pca_components_grid"] = "none|0.8|0.95"
     tuned["best_params"] = ['{"logisticregression__C":1.0}', '{"logisticregression__C":10.0}'] * 2
     tuned["best_score"] = [0.61, 0.64, 0.62, 0.66]
     results = pd.concat([baseline, tuned], ignore_index=True)
@@ -162,6 +163,7 @@ def test_build_provenance_table_records_config_params_and_metrics():
     assert provenance["decoder"].tolist() == ["logistic", "logistic"]
     assert tuned_row["pca_components"] == "0.95"
     assert tuned_row["tuning_c_grid"] == "0.1|1.0|10.0"
+    assert tuned_row["tuning_pca_components_grid"] == "none|0.8|0.95"
     assert tuned_row["selected_params_unique"] == 2
     assert "logisticregression__C" in tuned_row["selected_params"]
     assert round(float(tuned_row["selected_accuracy"]), 3) == 0.9

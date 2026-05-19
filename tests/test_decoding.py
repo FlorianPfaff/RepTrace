@@ -3,13 +3,18 @@ import pytest
 
 from reptrace.decoding import (
     DECODER_CHOICES,
+    DECODER_CLI_CHOICES,
+    TUNING_SCORING_CHOICES,
+    make_calibration_cross_validator,
     make_cross_validator,
     make_decoder,
     make_tuning_cross_validator,
     normalize_decoder_name,
     normalize_feature_preprocessor,
     normalize_pca_components,
+    normalize_tuning_scoring,
     parse_c_grid,
+    parse_pca_components_grid,
     predict_emission_probabilities,
     score_to_probabilities,
     time_windows,
@@ -46,6 +51,19 @@ def test_make_tuning_cross_validator_caps_to_feasible_grouped_splits():
         assert set(groups[train_idx]).isdisjoint(set(groups[test_idx]))
 
 
+def test_make_calibration_cross_validator_caps_and_preserves_group_boundaries():
+    labels = np.tile([0, 1, 0, 1], 4)
+    groups = np.repeat(np.arange(4), 4)
+
+    splits = make_calibration_cross_validator(labels, groups, n_splits=8)
+
+    assert len(splits) == 4
+    for train_idx, test_idx in splits:
+        assert set(groups[train_idx]).isdisjoint(set(groups[test_idx]))
+        assert set(labels[train_idx]) == {0, 1}
+        assert set(labels[test_idx]) == {0, 1}
+
+
 def test_make_decoder_produces_probabilities_for_standard_decoders():
     rng = np.random.default_rng(13)
     features = rng.normal(size=(30, 4))
@@ -56,6 +74,24 @@ def test_make_decoder_produces_probabilities_for_standard_decoders():
         model.fit(features, labels)
         probabilities = model.predict_proba(features[:3])
         assert probabilities.shape == (3, 2)
+
+
+def test_make_decoder_exposes_registry_decoders_as_probability_decoders():
+    rng = np.random.default_rng(23)
+    features = rng.normal(size=(36, 5))
+    labels = np.array([0, 1, 2] * 12)
+
+    for decoder in ("correlation_prototype", "multinomial_logistic", "multiclass_svm_weighted"):
+        model = make_decoder(decoder, max_iter=2000)
+        model.fit(features, labels)
+        probabilities = predict_emission_probabilities(model, features[:4])
+        assert probabilities.shape == (4, 3)
+        assert probabilities.sum(axis=1).round(6).tolist() == [1.0] * 4
+
+
+def test_decoder_cli_choices_accept_hyphenated_registry_names():
+    assert "correlation-prototype" in DECODER_CLI_CHOICES
+    assert normalize_decoder_name("correlation-prototype") == "correlation_prototype"
 
 
 def test_make_decoder_fits_pca_inside_probability_pipeline():
@@ -124,6 +160,58 @@ def test_make_decoder_can_tune_regularization_with_inner_cv():
     assert model.best_params_["logisticregression__C"] in {0.1, 1.0}
 
 
+def test_normalize_tuning_scoring_accepts_probability_quality_objectives():
+    assert "neg_brier" in TUNING_SCORING_CHOICES
+    assert "neg_ece" in TUNING_SCORING_CHOICES
+    assert normalize_tuning_scoring("neg-brier") == "neg_brier"
+    assert normalize_tuning_scoring("neg-ece") == "neg_ece"
+
+
+@pytest.mark.parametrize("scoring", ["neg_log_loss", "neg_brier", "neg_ece"])
+def test_tuned_decoder_can_optimize_probability_quality_objectives(scoring):
+    rng = np.random.default_rng(23)
+    features = rng.normal(size=(36, 6))
+    labels = np.array(["cat", "dog", "owl"] * 12)
+
+    model = make_decoder(
+        "logistic",
+        max_iter=3000,
+        tune_hyperparameters=True,
+        tuning_cv=3,
+        tuning_scoring=scoring,
+        tuning_c_grid=(0.1, 1.0),
+    )
+    model.fit(features, labels)
+    probabilities = model.predict_proba(features[:5])
+
+    assert probabilities.shape == (5, 3)
+    assert np.isfinite(model.best_score_)
+    assert model.best_score_ <= 0.0
+
+
+def test_make_decoder_can_tune_pca_components_with_inner_cv():
+    rng = np.random.default_rng(23)
+    features = rng.normal(size=(30, 8))
+    labels = np.array([0, 1] * 15)
+
+    model = make_decoder(
+        "logistic",
+        max_iter=2000,
+        feature_preprocessor="pca",
+        tune_hyperparameters=True,
+        tuning_cv=2,
+        tuning_c_grid=(0.1, 1.0),
+        tuning_pca_components_grid=(2, 3),
+    )
+    model.fit(features, labels)
+
+    assert model.best_params_["pca__n_components"] in {2, 3}
+    assert model.predict_proba(features[:3]).shape == (3, 2)
+
+    with pytest.raises(ValueError, match="tuning_pca_components_grid"):
+        make_decoder("logistic", tune_hyperparameters=True, tuning_pca_components_grid=(2,))
+
+
 def test_tuned_lda_compares_svd_and_shrinkage_variants():
     rng = np.random.default_rng(13)
     features = rng.normal(size=(24, 4))
@@ -166,6 +254,10 @@ def test_parse_c_grid_accepts_comma_separated_values():
     assert parse_c_grid("0.1,1,10") == (0.1, 1.0, 10.0)
 
 
+def test_parse_pca_components_grid_accepts_none_fraction_and_count():
+    assert parse_pca_components_grid("none,0.8,3") == (None, 0.8, 3)
+
+
 def test_uncalibrated_linear_svm_uses_score_derived_emissions():
     rng = np.random.default_rng(13)
     features = rng.normal(size=(30, 4))
@@ -177,6 +269,24 @@ def test_uncalibrated_linear_svm_uses_score_derived_emissions():
 
     assert probabilities.shape == (3, 2)
     assert probabilities.sum(axis=1).round(6).tolist() == [1.0, 1.0, 1.0]
+
+
+def test_calibrated_linear_svm_accepts_group_disjoint_calibration_cv():
+    rng = np.random.default_rng(13)
+    features = rng.normal(size=(24, 4))
+    labels = np.tile([0, 1, 0, 1], 6)
+    groups = np.repeat(np.arange(6), 4)
+    calibration_cv = make_calibration_cross_validator(labels, groups, n_splits=6)
+
+    model = make_decoder(
+        "linear_svm",
+        max_iter=5000,
+        calibration_cv=calibration_cv,
+    )
+    model.fit(features, labels)
+
+    probabilities = model.predict_proba(features[:3])
+    assert probabilities.shape == (3, 2)
 
 
 def test_score_to_probabilities_handles_binary_scores():

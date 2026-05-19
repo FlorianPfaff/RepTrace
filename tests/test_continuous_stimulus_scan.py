@@ -5,8 +5,14 @@ from pathlib import Path
 import mne
 import numpy as np
 import pandas as pd
+from sklearn.preprocessing import LabelEncoder
 
-from reptrace.continuous_stimulus_scan import label_event_table, run_continuous_stimulus_scan
+from reptrace.continuous_stimulus_scan import (
+    ScanSegment,
+    _scan_raw_probabilities,
+    label_event_table,
+    run_continuous_stimulus_scan,
+)
 from reptrace.observation_schema import validate_probability_observations
 
 
@@ -48,6 +54,49 @@ def test_label_event_table_maps_source_patterns() -> None:
     assert labeled["stimulus_class"].tolist() == ["fruit", "baseline"]
 
 
+class _RecordingProbabilityModel:
+    def __init__(self) -> None:
+        self.seen_features: np.ndarray | None = None
+
+    def predict_proba(self, features: np.ndarray) -> np.ndarray:
+        self.seen_features = np.asarray(features, dtype=float)
+        return np.repeat([[0.8, 0.2]], repeats=features.shape[0], axis=0)
+
+
+def test_scan_raw_probabilities_applies_epoch_baseline_to_stream_windows(tmp_path: Path) -> None:
+    sfreq = 4.0
+    data = np.array(
+        [
+            [10.0, 14.0, 22.0, 26.0, 30.0, 34.0, 38.0, 42.0],
+            [1.0, 3.0, 7.0, 9.0, 11.0, 13.0, 15.0, 17.0],
+        ]
+    )
+    raw_path = tmp_path / "scan_raw.fif"
+    info = mne.create_info(["EEG001", "EEG002"], sfreq=sfreq, ch_types="eeg")
+    mne.io.RawArray(data, info, verbose="error").save(raw_path, overwrite=True, verbose="error")
+    model = _RecordingProbabilityModel()
+
+    observations = _scan_raw_probabilities(
+        scan_raw=raw_path,
+        model=model,
+        encoder=LabelEncoder().fit(["A", "B"]),
+        channel_names=["EEG001", "EEG002"],
+        n_window_samples=4,
+        segments=[ScanSegment(stream_id="scan", start=0.0, stop=1.0, output_origin=0.0)],
+        scan_step=1.0,
+        decoder="logistic",
+        emission_mode="calibrated",
+        subject=None,
+        train_window=(-0.5, 0.25),
+        baseline=(None, -0.25),
+        demean_window=False,
+    )
+
+    assert model.seen_features is not None
+    np.testing.assert_allclose(model.seen_features, [[-2.0, 2.0, 10.0, 14.0, -1.0, 1.0, 5.0, 7.0]])
+    assert observations["predicted_class"].tolist() == ["A"]
+
+
 def test_continuous_stimulus_scan_trains_scans_and_summarizes_events(tmp_path: Path) -> None:
     train_events = pd.DataFrame(
         [
@@ -80,6 +129,11 @@ def test_continuous_stimulus_scan_trains_scans_and_summarizes_events(tmp_path: P
         train_window=(0.10, 0.20),
         picks="eeg",
         decoder="logistic",
+        feature_preprocessor="pca",
+        pca_components=1,
+        tune_hyperparameters=True,
+        tuning_cv_splits=2,
+        tuning_c_grid=(0.1, 1.0),
         max_iter=1000,
         scan_step=0.05,
         scan_start=0.0,
@@ -103,6 +157,10 @@ def test_continuous_stimulus_scan_trains_scans_and_summarizes_events(tmp_path: P
         "seed",
         "decoder",
         "backend",
+        "feature_preprocessor",
+        "pca_components",
+        "tuned_hyperparameters",
+        "best_params",
         "emission_mode",
         "train_time",
         "test_time",
@@ -116,6 +174,10 @@ def test_continuous_stimulus_scan_trains_scans_and_summarizes_events(tmp_path: P
     }.issubset(result.observations.columns)
     assert result.observations["backend"].unique().tolist() == ["sklearn"]
     assert result.observations["seed"].unique().tolist() == [13]
+    assert result.observations["feature_preprocessor"].astype(str).unique().tolist() == ["pca"]
+    assert set(result.observations["pca_components"].astype(str)) == {"1"}
+    assert result.observations["tuned_hyperparameters"].astype(str).str.lower().eq("true").all()
+    assert result.observations["best_params"].astype(str).str.contains("logisticregression__C").all()
     assert result.observations["test_time"].round(6).tolist() == result.observations["time"].round(6).tolist()
     assert result.observations["sequence_id"].str.contains(":").all()
     assert result.observations["preprocessing_hash"].str.len().eq(16).all()
