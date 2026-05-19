@@ -73,7 +73,23 @@ def test_make_decoder_fits_pca_inside_probability_pipeline():
     assert probabilities.sum(axis=1).round(6).tolist() == [1.0] * 5
 
 
-def test_elastic_net_logistic_uses_saga_mixed_penalty():
+def test_sparse_logistic_uses_l1_saga_regularization():
+    rng = np.random.default_rng(13)
+    features = rng.normal(size=(30, 6))
+    labels = np.array([0, 1] * 15)
+
+    model = make_decoder("l1-logistic", max_iter=2000)
+    model.fit(features, labels)
+    probabilities = model.predict_proba(features[:3])
+
+    classifier = model.named_steps["logisticregression"]
+    assert classifier.l1_ratio == 1.0
+    assert classifier.solver == "saga"
+    assert classifier.class_weight == "balanced"
+    assert probabilities.shape == (3, 2)
+
+
+def test_elastic_net_logistic_uses_saga_with_default_l1_ratio():
     rng = np.random.default_rng(13)
     features = rng.normal(size=(30, 6))
     labels = np.array([0, 1] * 15)
@@ -192,6 +208,24 @@ def test_tuned_lda_compares_svd_and_shrinkage_variants():
     assert model.predict_proba(features[:3]).shape == (3, 2)
 
 
+def test_tuned_sparse_logistic_tunes_c_with_inner_cv():
+    rng = np.random.default_rng(13)
+    features = rng.normal(size=(24, 6))
+    labels = np.array([0, 1] * 12)
+
+    model = make_decoder(
+        "sparse-logreg",
+        max_iter=2000,
+        tune_hyperparameters=True,
+        tuning_cv=2,
+        tuning_c_grid=(0.1, 1.0),
+    )
+    model.fit(features, labels)
+
+    assert model.predict_proba(features[:3]).shape == (3, 2)
+    assert model.best_params_["logisticregression__C"] in {0.1, 1.0}
+
+
 def test_shrinkage_lda_uses_lsqr_auto_shrinkage():
     rng = np.random.default_rng(17)
     features = rng.normal(size=(30, 12))
@@ -263,5 +297,6 @@ def test_score_to_probabilities_handles_binary_scores():
 
 def test_normalize_decoder_name_accepts_svm_alias():
     assert normalize_decoder_name("svm") == "linear_svm"
+    assert normalize_decoder_name("l1-logistic") == "sparse_logistic"
     assert normalize_decoder_name("elasticnet-logistic") == "elastic_net_logistic"
     assert normalize_decoder_name("lda-shrinkage") == "shrinkage_lda"
