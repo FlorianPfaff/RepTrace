@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from reptrace.decoding import (
+    BUILTIN_DECODER_CHOICES,
     DECODER_CHOICES,
     make_cross_validator,
     make_decoder,
@@ -51,11 +52,19 @@ def test_make_decoder_produces_probabilities_for_standard_decoders():
     features = rng.normal(size=(30, 4))
     labels = np.array([0, 1] * 15)
 
-    for decoder in DECODER_CHOICES:
+    for decoder in BUILTIN_DECODER_CHOICES:
         model = make_decoder(decoder, max_iter=2000)
         model.fit(features, labels)
         probabilities = model.predict_proba(features[:3])
         assert probabilities.shape == (3, 2)
+
+
+def test_decoder_choices_expose_classifier_registry_entries():
+    assert "correlation-prototype" in DECODER_CHOICES
+    assert "multinomial-logistic" in DECODER_CHOICES
+    assert "random-forest" in DECODER_CHOICES
+    assert normalize_decoder_name("correlation_prototype") == "correlation-prototype"
+    assert normalize_decoder_name("multiclass-svm-weighted") == "multiclass-svm-weighted"
 
 
 def test_make_decoder_fits_pca_inside_probability_pipeline():

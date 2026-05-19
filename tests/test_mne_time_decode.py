@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from reptrace.decoding import DECODER_CHOICES, normalize_decoder_name
 from reptrace.mne_time_decode import run_time_resolved_decode
 
 
@@ -84,6 +85,45 @@ def test_run_time_resolved_decode_writes_probability_observations(tmp_path: Path
     assert observations["subject"].unique().tolist() == ["sub-01"]
     assert sorted(observations["emission_mode"].unique().tolist()) == ["calibrated", "uncalibrated"]
     assert observations[["prob_class_0", "prob_class_1"]].sum(axis=1).round(6).tolist() == [1.0] * 32
+
+
+def test_mne_time_decode_exposes_classifier_registry_decoders():
+    assert "correlation-prototype" in DECODER_CHOICES
+    assert "multinomial-logistic" in DECODER_CHOICES
+    assert "random-forest" in DECODER_CHOICES
+    assert normalize_decoder_name("correlation_prototype") == "correlation-prototype"
+    assert normalize_decoder_name("multiclass-svm-weighted") == "multiclass-svm-weighted"
+    assert normalize_decoder_name("shrinkage-lda") == "shrinkage_lda"
+
+
+def test_run_time_resolved_decode_supports_registry_decoder(tmp_path: Path, monkeypatch):
+    rng = np.random.default_rng(29)
+    labels = np.array(["animate", "inanimate"] * 4)
+    data = rng.normal(size=(8, 1, 5))
+    data[labels == "animate", 0, :] += 0.5
+    metadata = pd.DataFrame({"condition": labels, "session": ["a", "a", "b", "b", "c", "c", "d", "d"]})
+    epochs = FakeEpochs(data, np.array([0.00, 0.01, 0.02, 0.03, 0.04]), metadata)
+    monkeypatch.setattr("reptrace.mne_time_decode.mne.read_epochs", lambda *args, **kwargs: epochs)
+
+    out = tmp_path / "decode_registry.csv"
+    observations_out = tmp_path / "observations_registry.csv"
+
+    results = run_time_resolved_decode(
+        epochs_path=tmp_path / "sub-01_epo.fif",
+        label_column="condition",
+        out_path=out,
+        n_splits=2,
+        window_ms=20,
+        step_ms=20,
+        decoder="correlation-prototype",
+        emission_mode="uncalibrated",
+        observation_out_path=observations_out,
+    )
+    observations = pd.read_csv(observations_out)
+
+    assert results["decoder"].unique().tolist() == ["correlation-prototype"]
+    assert observations["decoder"].unique().tolist() == ["correlation-prototype"]
+    assert observations[["prob_class_0", "prob_class_1"]].sum(axis=1).round(6).tolist() == [1.0] * len(observations)
 
 
 def test_temporal_train_window_ensemble_writes_all_test_times(tmp_path: Path, monkeypatch):
