@@ -7,6 +7,7 @@ import numpy as np
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.feature_selection import SelectPercentile, f_classif
 from sklearn.linear_model import LogisticRegression, RidgeClassifier
 from sklearn.model_selection import GridSearchCV, StratifiedGroupKFold, StratifiedKFold
 from sklearn.pipeline import make_pipeline
@@ -22,12 +23,16 @@ from reptrace.decoding.sampling import (
     select_class_limited_indices as select_class_limited_indices,
 )
 
-DECODER_CHOICES = ("logistic", "ridge", "lda", "shrinkage_lda", "linear_svm")
+DECODER_CHOICES = ("logistic", "elastic_net_logistic", "ridge", "lda", "shrinkage_lda", "linear_svm")
 EMISSION_MODE_CHOICES = ("calibrated", "uncalibrated")
-FEATURE_PREPROCESSOR_CHOICES = ("none", "pca", "pca_whiten")
+FEATURE_PREPROCESSOR_CHOICES = ("none", "pca", "pca_whiten", "anova_select")
 TUNING_SCORING_CHOICES = ("accuracy", "balanced_accuracy", "neg_log_loss")
 DEFAULT_TUNING_C_GRID = (0.01, 0.1, 1.0, 10.0, 100.0)
 DEFAULT_TUNING_ALPHA_GRID = (0.01, 0.1, 1.0, 10.0, 100.0)
+DEFAULT_ANOVA_SELECT_PERCENTILE = 20
+ANOVA_SELECT_PERCENTILE_GRID = (10, 20, 40, 60)
+DEFAULT_ELASTIC_NET_L1_RATIO = 0.5
+ELASTIC_NET_L1_RATIO_GRID = (0.15, 0.5, 0.85)
 
 
 def make_logistic_decoder(
@@ -93,6 +98,18 @@ def make_decoder(
                 solver="lbfgs",
             ),
         )
+    if normalized == "elastic_net_logistic":
+        return make_pipeline(
+            StandardScaler(),
+            *feature_steps,
+            LogisticRegression(
+                class_weight="balanced",
+                l1_ratio=DEFAULT_ELASTIC_NET_L1_RATIO,
+                max_iter=max_iter,
+                random_state=13,
+                solver="saga",
+            ),
+        )
     if normalized == "lda":
         return make_pipeline(
             StandardScaler(),
@@ -153,7 +170,9 @@ def make_tuned_decoder(
     """Create a decoder with inner-CV hyperparameter selection.
 
     Logistic regression and linear SVM tune the regularization strength ``C``.
-    Ridge tunes the L2 penalty strength ``alpha``. LDA compares the default SVD solver with shrinkage LDA
+    Elastic-net logistic regression tunes both ``C`` and the L1/L2 mixing
+    ratio. Ridge tunes the L2 penalty strength ``alpha``. LDA compares the
+    default SVD solver with shrinkage LDA
     (``solver='lsqr', shrinkage='auto'``), which is often better conditioned for
     high-dimensional M/EEG windows.
     """
@@ -174,6 +193,23 @@ def make_tuned_decoder(
             ),
         )
         param_grid = {"logisticregression__C": c_grid}
+        param_grid = _with_feature_preprocessor_tuning(estimator, param_grid, feature_preprocessor)
+    elif normalized == "elastic_net_logistic":
+        estimator = make_pipeline(
+            StandardScaler(),
+            *feature_steps,
+            LogisticRegression(
+                class_weight="balanced",
+                l1_ratio=DEFAULT_ELASTIC_NET_L1_RATIO,
+                max_iter=max_iter,
+                random_state=13,
+                solver="saga",
+            ),
+        )
+        param_grid = {
+            "logisticregression__C": c_grid,
+            "logisticregression__l1_ratio": ELASTIC_NET_L1_RATIO_GRID,
+        }
     elif normalized == "lda":
         estimator = make_pipeline(
             StandardScaler(),
@@ -190,6 +226,7 @@ def make_tuned_decoder(
                 "lineardiscriminantanalysis__shrinkage": ["auto"],
             },
         ]
+        param_grid = _with_feature_preprocessor_tuning(estimator, param_grid, feature_preprocessor)
     elif normalized == "shrinkage_lda":
         estimator = make_pipeline(
             StandardScaler(),
@@ -214,6 +251,7 @@ def make_tuned_decoder(
         else:
             estimator = _make_calibrated_classifier(ridge, method="sigmoid", cv=3)
             param_grid = {_calibrated_estimator_param(estimator, "ridgeclassifier__alpha"): DEFAULT_TUNING_ALPHA_GRID}
+        param_grid = _with_feature_preprocessor_tuning(estimator, param_grid, feature_preprocessor)
     else:
         if emission_mode == "uncalibrated" and scoring == "neg_log_loss":
             raise ValueError("neg_log_loss tuning requires probability estimates; use calibrated emissions for linear_svm.")
@@ -231,6 +269,7 @@ def make_tuned_decoder(
         else:
             estimator = _make_calibrated_classifier(linear_svm, method="sigmoid", cv=3)
             param_grid = {_calibrated_estimator_param(estimator, "linearsvc__C"): c_grid}
+        param_grid = _with_feature_preprocessor_tuning(estimator, param_grid, feature_preprocessor)
 
     return GridSearchCV(
         estimator=estimator,
@@ -258,6 +297,24 @@ def _calibrated_estimator_param(estimator, nested_parameter: str) -> str:
         if candidate in params:
             return candidate
     raise ValueError(f"Could not find calibrated-estimator parameter for '{nested_parameter}'.")
+
+
+def _feature_preprocessor_param(estimator, feature_preprocessor: str | None) -> str | None:
+    if normalize_feature_preprocessor(feature_preprocessor) != "anova_select":
+        return None
+    direct = "selectpercentile__percentile"
+    if direct in estimator.get_params():
+        return direct
+    return _calibrated_estimator_param(estimator, direct)
+
+
+def _with_feature_preprocessor_tuning(estimator, param_grid, feature_preprocessor: str | None):
+    feature_param = _feature_preprocessor_param(estimator, feature_preprocessor)
+    if feature_param is None:
+        return param_grid
+    if isinstance(param_grid, list):
+        return [{**grid, feature_param: ANOVA_SELECT_PERCENTILE_GRID} for grid in param_grid]
+    return {**param_grid, feature_param: ANOVA_SELECT_PERCENTILE_GRID}
 
 
 def parse_c_grid(values: Sequence[float] | str | None) -> tuple[float, ...]:
@@ -289,6 +346,8 @@ def normalize_decoder_name(name: str) -> str:
         return "linear_svm"
     if normalized in {"ridge_classifier", "ridge_classification"}:
         return "ridge"
+    if normalized in {"elasticnet_logistic", "logistic_elastic_net", "elastic_net_logreg"}:
+        return "elastic_net_logistic"
     if normalized in {"lda_shrinkage", "shrinkage_lda", "shrinkagelda"}:
         return "shrinkage_lda"
     if normalized not in DECODER_CHOICES:
@@ -311,6 +370,8 @@ def normalize_feature_preprocessor(name: str | None) -> str:
         return "none"
     if normalized in {"pca_whitened", "whitened_pca", "whiten_pca"}:
         return "pca_whiten"
+    if normalized in {"anova", "anova_percentile", "select_percentile", "select_k_best", "kbest"}:
+        return "anova_select"
     if normalized not in FEATURE_PREPROCESSOR_CHOICES:
         raise ValueError(
             f"Unknown feature preprocessor '{name}'. Available preprocessors: {', '.join(FEATURE_PREPROCESSOR_CHOICES)}."
@@ -356,12 +417,48 @@ def normalize_pca_components(n_components: int | float | str | None) -> int | fl
     raise ValueError("pca_components must be an integer count, a variance fraction in (0, 1), or None.")
 
 
-def _feature_preprocessor_steps(feature_preprocessor: str | None, pca_components: int | float | str | None) -> list[PCA]:
+def normalize_anova_select_percentile(percentile: int | float | str | None) -> int:
+    """Normalize ANOVA feature-selection percentile specifications."""
+    if percentile is None:
+        return DEFAULT_ANOVA_SELECT_PERCENTILE
+    if isinstance(percentile, str):
+        stripped = percentile.strip()
+        if stripped == "" or stripped.lower() in {"auto", "default"}:
+            return DEFAULT_ANOVA_SELECT_PERCENTILE
+        try:
+            parsed: int | float = float(stripped) if any(marker in stripped for marker in (".", "e", "E")) else int(stripped)
+        except ValueError as exc:
+            raise ValueError("anova_select percentile must be a number in (0, 100].") from exc
+        return normalize_anova_select_percentile(parsed)
+    if isinstance(percentile, (np.integer,)):
+        percentile = int(percentile)
+    if isinstance(percentile, (np.floating,)):
+        percentile = float(percentile)
+    if isinstance(percentile, bool):
+        raise ValueError("anova_select percentile must be numeric, not boolean.")
+    if not isinstance(percentile, (int, float)) or not np.isfinite(percentile) or percentile <= 0 or percentile > 100:
+        raise ValueError("anova_select percentile must be finite and in (0, 100].")
+    if not float(percentile).is_integer():
+        raise ValueError("anova_select percentile must be an integer percentage.")
+    return int(percentile)
+
+
+def _feature_preprocessor_steps(
+    feature_preprocessor: str | None,
+    pca_components: int | float | str | None,
+) -> list[PCA | SelectPercentile]:
     normalized = normalize_feature_preprocessor(feature_preprocessor)
     if normalized == "none":
         if pca_components is not None:
             raise ValueError("pca_components can only be set when feature_preprocessor is 'pca' or 'pca_whiten'.")
         return []
+    if normalized == "anova_select":
+        return [
+            SelectPercentile(
+                score_func=f_classif,
+                percentile=normalize_anova_select_percentile(pca_components),
+            )
+        ]
     return [
         PCA(
             n_components=normalize_pca_components(pca_components),
