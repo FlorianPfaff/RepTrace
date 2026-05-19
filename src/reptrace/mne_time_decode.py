@@ -19,6 +19,7 @@ from reptrace.decoding import (
     make_cross_validator,
     make_decoder,
     make_tuning_cross_validator,
+    normalize_anova_select_percentile,
     normalize_decoder_name,
     normalize_emission_mode,
     normalize_feature_preprocessor,
@@ -32,7 +33,7 @@ from reptrace.metrics import brier_score_multiclass, expected_calibration_error,
 from reptrace.observations import ProbabilityObservationTable, stable_hash
 
 EMISSION_RUN_CHOICES = (*EMISSION_MODE_CHOICES, "both")
-FEATURE_PREPROCESSOR_RUN_CHOICES = (*FEATURE_PREPROCESSOR_CHOICES, "pca-whiten")
+FEATURE_PREPROCESSOR_RUN_CHOICES = (*FEATURE_PREPROCESSOR_CHOICES, "pca-whiten", "anova-select", "select-percentile")
 TimeWindow = tuple[int, int, float]
 TemporalTrainWindow = tuple[float, float]
 
@@ -384,8 +385,15 @@ def run_time_resolved_decode(
     emission_modes = list(EMISSION_MODE_CHOICES) if emission_mode == "both" else [normalize_emission_mode(emission_mode)]
     feature_preprocessor_name = normalize_feature_preprocessor(feature_preprocessor)
     if feature_preprocessor_name == "none" and pca_components is not None:
-        raise ValueError("pca_components can only be set when feature_preprocessor is 'pca' or 'pca_whiten'.")
-    pca_components_value = normalize_pca_components(pca_components) if feature_preprocessor_name != "none" else None
+        raise ValueError(
+            "pca_components can only be set when feature_preprocessor is 'pca', 'pca_whiten', or 'anova_select'."
+        )
+    if feature_preprocessor_name == "anova_select":
+        pca_components_value = normalize_anova_select_percentile(pca_components)
+    elif feature_preprocessor_name != "none":
+        pca_components_value = normalize_pca_components(pca_components)
+    else:
+        pca_components_value = None
     tuning_scoring = normalize_tuning_scoring(tuning_scoring)
     tuning_c_grid_values = parse_c_grid(tuning_c_grid)
     normalized_temporal_train_window = _normalize_temporal_train_window(temporal_train_window)
@@ -689,7 +697,10 @@ def main() -> None:
     parser.add_argument("--feature-preprocessor", choices=FEATURE_PREPROCESSOR_RUN_CHOICES, default="none")
     parser.add_argument(
         "--pca-components",
-        help="PCA component count or explained-variance fraction. Only valid with --feature-preprocessor pca or pca-whiten.",
+        help=(
+            "PCA component count or explained-variance fraction. With "
+            "--feature-preprocessor anova-select, this is the selected feature percentile."
+        ),
     )
     parser.add_argument("--tune-hyperparameters", action="store_true", help="Use nested inner-CV hyperparameter selection inside each outer train fold.")
     parser.add_argument("--tuning-cv-splits", type=int, default=3, help="Maximum number of inner CV folds for --tune-hyperparameters.")

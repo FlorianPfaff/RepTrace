@@ -355,6 +355,8 @@ manifest column or `--decoder` CLI option:
 
 - `logistic`: balanced multinomial logistic regression;
 - `sparse_logistic`: L1-regularized balanced logistic regression with the SAGA solver;
+- `elastic_net_logistic`: balanced logistic regression with SAGA elastic-net
+  regularization;
 - `lda`: linear discriminant analysis;
 - `shrinkage_lda`: LDA with LSQR covariance shrinkage estimated inside each
   training fold;
@@ -379,8 +381,11 @@ When a manifest contains a `decoder` column, result files are named like
 Manifests can also pin fold-local feature preprocessing and nested decoder
 tuning. The relevant columns are `feature_preprocessor`, `pca_components`,
 `tune_hyperparameters`, `tuning_cv_splits`, `tuning_scoring`, and
-`tuning_c_grid`. These settings are preserved in aggregate summaries, so tuned
-and untuned variants are never averaged together accidentally.
+`tuning_c_grid`. Supported feature preprocessors are `none`, `pca`,
+`pca-whiten`, and `anova-select`. For `anova-select`, `pca_components` is the
+percentage of highest-scoring ANOVA F-test features kept inside each training
+fold. These settings are preserved in aggregate summaries, so tuned and
+untuned variants are never averaged together accidentally.
 
 Each benchmark also writes `provenance.csv`. This table has one row per run
 condition and records decoder, emission mode, PCA mode/components, tuning grid,
@@ -406,6 +411,25 @@ That manifest uses `feature_preprocessor=pca-whiten`, `pca_components=0.95`,
 the C grid `0.01,0.1,1,10,100`. PCA whitening and C tuning are fitted only on
 the training split for each outer fold.
 
+Run the tuned ANOVA feature-selection logistic variant over all 19 staged
+subjects:
+
+```bash
+python -m reptrace.benchmark \
+  benchmarks/nod_animate_logistic_tuned_anova_select_all.csv \
+  --out-dir results/nod_animate_logistic_tuned_anova_select_all \
+  --aggregate-out results/nod_animate_logistic_tuned_anova_select_all/summary.csv \
+  --plot-out results/nod_animate_logistic_tuned_anova_select_all/summary.png \
+  --calibration-dir results/nod_animate_logistic_tuned_anova_select_all/calibration \
+  --chance 0.5 \
+  --resume
+```
+
+That manifest uses `anova-select` with an initial 20 percent setting, then
+tunes both the selected feature percentile (`10,20,40,60`) and logistic C with
+2-fold inner CV. This tests whether supervised fold-local denoising helps the
+main animate/inanimate task without changing the outer held-out folds.
+
 Run an explicit shrinkage-LDA variant over all 19 staged subjects:
 
 ```bash
@@ -423,6 +447,24 @@ python -m reptrace.benchmark \
 shrinkage="auto")`. This is still fitted independently in each outer training
 fold, but it regularizes covariance estimates that can be unstable in short
 high-dimensional MEG windows.
+
+Run the elastic-net logistic variant when dense logistic regression may be using
+too many weak noisy features but pure feature selection would be too aggressive:
+
+```bash
+python -m reptrace.benchmark \
+  benchmarks/nod_animate_elastic_net_logistic_all.csv \
+  --out-dir results/nod_animate_elastic_net_logistic_all \
+  --aggregate-out results/nod_animate_elastic_net_logistic_all/summary.csv \
+  --plot-out results/nod_animate_elastic_net_logistic_all/summary.png \
+  --calibration-dir results/nod_animate_elastic_net_logistic_all/calibration \
+  --chance 0.5 \
+  --resume
+```
+
+The untuned manifest uses a fixed 50/50 L1/L2 mix. If
+`tune_hyperparameters=true` is enabled for `elastic_net_logistic`, nested CV
+searches both the C grid and the L1/L2 mixing grid `0.15,0.5,0.85`.
 
 Run the slower tuned temporal train-window ensemble:
 
@@ -555,6 +597,18 @@ gh workflow run nod-decoder-all.yml \
   -f n_permutations=10000
 ```
 
+Or run the tuned ANOVA feature-selection logistic manifest:
+
+```bash
+gh workflow run nod-decoder-all.yml \
+  --repo IPS-Stuttgart/RepTrace \
+  --ref main \
+  -f data_root=../data/nod \
+  -f manifest_csv=benchmarks/nod_animate_logistic_tuned_anova_select_all.csv \
+  -f output_dir=results/nod_animate_logistic_tuned_anova_select_all \
+  -f n_permutations=10000
+```
+
 Or run the tuned temporal train-window ensemble:
 
 ```bash
@@ -576,6 +630,18 @@ gh workflow run nod-decoder-all.yml \
   -f data_root=../data/nod \
   -f manifest_csv=benchmarks/nod_animate_shrinkage_lda_all.csv \
   -f output_dir=results/nod_animate_shrinkage_lda_all \
+  -f n_permutations=10000
+```
+
+Or run the elastic-net logistic manifest:
+
+```bash
+gh workflow run nod-decoder-all.yml \
+  --repo IPS-Stuttgart/RepTrace \
+  --ref main \
+  -f data_root=../data/nod \
+  -f manifest_csv=benchmarks/nod_animate_elastic_net_logistic_all.csv \
+  -f output_dir=results/nod_animate_elastic_net_logistic_all \
   -f n_permutations=10000
 ```
 

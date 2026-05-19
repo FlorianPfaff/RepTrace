@@ -205,7 +205,7 @@ jobs:
             goto after_inference
           )
           set "REPTRACE_RAN_EXACT_INFERENCE="
-          for %%D in (logistic sparse_logistic lda shrinkage_lda linear_svm) do (
+          for %%D in (logistic sparse_logistic elastic_net_logistic lda shrinkage_lda linear_svm) do (
             if exist "%REPTRACE_OUTPUT_DIR%\sub-*_%%D_time_decode.csv" (
               set "REPTRACE_RAN_EXACT_INFERENCE=1"
               py -${{ inputs.python_version }} -m poetry run python -m reptrace.inference "%REPTRACE_OUTPUT_DIR%\sub-*_%%D_time_decode.csv" --chance 0.5 --n-permutations "${{ inputs.n_permutations }}" --out-time "%REPTRACE_OUTPUT_DIR%\inference_%%D_time.csv" --out-clusters "%REPTRACE_OUTPUT_DIR%\inference_%%D_clusters.csv"
