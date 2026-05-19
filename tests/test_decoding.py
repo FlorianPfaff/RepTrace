@@ -2,13 +2,17 @@ import numpy as np
 import pytest
 
 from reptrace.decoding import (
+    BUILTIN_DECODER_CHOICES,
+    DECODER_CLI_CHOICES,
     DECODER_CHOICES,
+    TUNING_SCORING_CHOICES,
     make_cross_validator,
     make_decoder,
     make_tuning_cross_validator,
     normalize_decoder_name,
     normalize_feature_preprocessor,
     normalize_pca_components,
+    normalize_tuning_scoring,
     parse_c_grid,
     predict_emission_probabilities,
     score_to_probabilities,
@@ -51,11 +55,41 @@ def test_make_decoder_produces_probabilities_for_standard_decoders():
     features = rng.normal(size=(30, 4))
     labels = np.array([0, 1] * 15)
 
-    for decoder in DECODER_CHOICES:
+    for decoder in BUILTIN_DECODER_CHOICES:
         model = make_decoder(decoder, max_iter=2000)
         model.fit(features, labels)
         probabilities = model.predict_proba(features[:3])
         assert probabilities.shape == (3, 2)
+
+
+def test_decoder_choices_expose_classifier_registry_entries():
+    assert "correlation-prototype" in DECODER_CHOICES
+    assert "multinomial-logistic" in DECODER_CHOICES
+    assert "random-forest" in DECODER_CHOICES
+    assert normalize_decoder_name("correlation_prototype") == "correlation-prototype"
+    assert normalize_decoder_name("multiclass-svm-weighted") == "multiclass-svm-weighted"
+
+
+def test_make_decoder_exposes_registry_decoders_as_probability_decoders():
+    rng = np.random.default_rng(23)
+    features = rng.normal(size=(36, 5))
+    labels = np.array([0, 1, 2] * 12)
+
+    for decoder in (
+        "correlation-prototype",
+        "multinomial-logistic",
+        "multiclass-svm-weighted",
+    ):
+        model = make_decoder(decoder, max_iter=2000)
+        model.fit(features, labels)
+        probabilities = predict_emission_probabilities(model, features[:4])
+        assert probabilities.shape == (4, 3)
+        assert probabilities.sum(axis=1).round(6).tolist() == [1.0] * 4
+
+
+def test_decoder_cli_choices_accept_hyphenated_registry_names():
+    assert "correlation-prototype" in DECODER_CLI_CHOICES
+    assert normalize_decoder_name("correlation-prototype") == "correlation-prototype"
 
 
 def test_make_decoder_fits_pca_inside_probability_pipeline():
@@ -70,6 +104,20 @@ def test_make_decoder_fits_pca_inside_probability_pipeline():
     assert model.named_steps["pca"].n_components == 3
     assert probabilities.shape == (5, 2)
     assert probabilities.sum(axis=1).round(6).tolist() == [1.0] * 5
+
+
+def test_gaussian_nb_produces_probabilities():
+    rng = np.random.default_rng(23)
+    features = rng.normal(size=(30, 8))
+    labels = np.array([0, 1] * 15)
+
+    model = make_decoder("naive-bayes")
+    model.fit(features, labels)
+    probabilities = model.predict_proba(features[:3])
+
+    assert model.named_steps["gaussiannb"].var_smoothing == 1e-9
+    assert probabilities.shape == (3, 2)
+    assert probabilities.sum(axis=1).round(6).tolist() == [1.0, 1.0, 1.0]
 
 
 def test_make_decoder_accepts_pca_whiten_alias_and_fractional_components():
@@ -124,6 +172,35 @@ def test_make_decoder_can_tune_regularization_with_inner_cv():
     assert model.best_params_["logisticregression__C"] in {0.1, 1.0}
 
 
+def test_normalize_tuning_scoring_accepts_probability_quality_objectives():
+    assert "neg_brier" in TUNING_SCORING_CHOICES
+    assert "neg_ece" in TUNING_SCORING_CHOICES
+    assert normalize_tuning_scoring("neg-brier") == "neg_brier"
+    assert normalize_tuning_scoring("neg-ece") == "neg_ece"
+
+
+@pytest.mark.parametrize("scoring", ["neg_log_loss", "neg_brier", "neg_ece"])
+def test_tuned_decoder_can_optimize_probability_quality_objectives(scoring):
+    rng = np.random.default_rng(23)
+    features = rng.normal(size=(36, 6))
+    labels = np.array(["cat", "dog", "owl"] * 12)
+
+    model = make_decoder(
+        "logistic",
+        max_iter=3000,
+        tune_hyperparameters=True,
+        tuning_cv=3,
+        tuning_scoring=scoring,
+        tuning_c_grid=(0.1, 1.0),
+    )
+    model.fit(features, labels)
+    probabilities = model.predict_proba(features[:5])
+
+    assert probabilities.shape == (5, 3)
+    assert np.isfinite(model.best_score_)
+    assert model.best_score_ <= 0.0
+
+
 def test_tuned_lda_compares_svd_and_shrinkage_variants():
     rng = np.random.default_rng(13)
     features = rng.normal(size=(24, 4))
@@ -162,6 +239,18 @@ def test_tuned_shrinkage_lda_selects_shrinkage_strength():
     assert model.predict_proba(features[:3]).shape == (3, 2)
 
 
+def test_tuned_gaussian_nb_selects_var_smoothing():
+    rng = np.random.default_rng(29)
+    features = rng.normal(size=(30, 8))
+    labels = np.array([0, 1] * 15)
+
+    model = make_decoder("gaussian-nb", tune_hyperparameters=True, tuning_cv=2)
+    model.fit(features, labels)
+
+    assert "gaussiannb__var_smoothing" in model.best_params_
+    assert model.predict_proba(features[:3]).shape == (3, 2)
+
+
 def test_parse_c_grid_accepts_comma_separated_values():
     assert parse_c_grid("0.1,1,10") == (0.1, 1.0, 10.0)
 
@@ -187,5 +276,6 @@ def test_score_to_probabilities_handles_binary_scores():
 
 
 def test_normalize_decoder_name_accepts_svm_alias():
+    assert normalize_decoder_name("naive-bayes") == "gaussian_nb"
     assert normalize_decoder_name("svm") == "linear_svm"
     assert normalize_decoder_name("lda-shrinkage") == "shrinkage_lda"

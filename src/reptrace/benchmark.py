@@ -9,11 +9,22 @@ import pandas as pd
 
 from reptrace.metadata import prepare_binary_metadata
 from reptrace.mne_time_decode import run_time_resolved_decode
+from reptrace.observation_ensemble import (
+    DEFAULT_BASELINE_GROUP_COLUMNS as DEFAULT_ENSEMBLE_BASELINE_GROUP_COLUMNS,
+    DEFAULT_BASELINE_WINDOW as DEFAULT_ENSEMBLE_BASELINE_WINDOW,
+    DEFAULT_DECODERS as DEFAULT_ENSEMBLE_SOURCE_DECODERS,
+    DEFAULT_ENSEMBLE_DECODER,
+    DEFAULT_WEIGHTS as DEFAULT_ENSEMBLE_WEIGHTS,
+    ensemble_probability_observations,
+    summarize_ensemble_metrics,
+)
+from reptrace.observation_schema import read_validated_probability_observations
+from reptrace.observations import ProbabilityObservationTable
 from reptrace.plot_time_decode import plot_time_decode_results
 from reptrace.results import aggregate_time_decode_csvs, write_provenance_table
 from reptrace.temporal_smoothing import DEFAULT_EMISSION_SUFFIX, DEFAULT_FIT_WINDOW, smooth_probability_observations
 from reptrace.decoding import (
-    DECODER_CHOICES,
+    DECODER_CLI_CHOICES,
     EMISSION_MODE_CHOICES,
     FEATURE_PREPROCESSOR_CHOICES,
     TUNING_SCORING_CHOICES,
@@ -41,6 +52,8 @@ class BenchmarkRun:
     skipped_existing: int = 0
     smoothed_observation_csv: Path | None = None
     smoothed_metric_csv: Path | None = None
+    ensemble_observation_csv: Path | None = None
+    ensemble_metric_csv: Path | None = None
 
 
 def _missing(value: Any) -> bool:
@@ -196,6 +209,57 @@ def _prepare_or_resolve_metadata(row: pd.Series, manifest_dir: Path, out_dir: Pa
     return metadata_out
 
 
+def _ensemble_weights_for_sources(source_decoders: tuple[str, ...], weights: tuple[float, ...] | None) -> tuple[float, ...]:
+    if weights is not None:
+        return weights
+    if source_decoders == DEFAULT_ENSEMBLE_SOURCE_DECODERS:
+        return DEFAULT_ENSEMBLE_WEIGHTS
+    return tuple(1.0 for _ in source_decoders)
+
+
+def _write_observation_ensemble(
+    observation_csvs: list[Path],
+    *,
+    out_dir: Path,
+    resume: bool,
+    source_decoders: tuple[str, ...],
+    weights: tuple[float, ...] | None,
+    source_emission_mode: str | None,
+    baseline_window: tuple[float, float] | None,
+    baseline_group_columns: tuple[str, ...],
+    calibration_bins: int,
+) -> tuple[Path, Path]:
+    if not observation_csvs:
+        raise ValueError("Observation ensembling requires probability observations; pass --observation-dir or --observation-ensemble-dir.")
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = _safe_name(DEFAULT_ENSEMBLE_DECODER)
+    ensemble_observation_csv = out_dir / f"{stem}_observations.csv"
+    ensemble_metric_csv = out_dir / f"{stem}_metrics.csv"
+    if resume and _usable_file(ensemble_observation_csv) and _usable_file(ensemble_metric_csv):
+        return ensemble_observation_csv, ensemble_metric_csv
+
+    observations = read_validated_probability_observations(
+        observation_csvs,
+        profile="generic",
+        require_normalized=True,
+    )
+    ensemble = ensemble_probability_observations(
+        observations,
+        decoders=source_decoders,
+        weights=_ensemble_weights_for_sources(source_decoders, weights),
+        source_emission_mode=source_emission_mode,
+        baseline_window=baseline_window,
+        baseline_group_columns=baseline_group_columns,
+    )
+    ProbabilityObservationTable(ensemble).to_csv(ensemble_observation_csv)
+
+    metrics = summarize_ensemble_metrics(ensemble, ece_bins=calibration_bins)
+    ensemble_metric_csv.parent.mkdir(parents=True, exist_ok=True)
+    metrics.to_csv(ensemble_metric_csv, index=False)
+    return ensemble_observation_csv, ensemble_metric_csv
+
+
 def run_benchmark_manifest(
     manifest_csv: Path,
     *,
@@ -225,6 +289,12 @@ def run_benchmark_manifest(
     calibration_dir: Path | None = None,
     calibration_bins: int = 10,
     observation_dir: Path | None = None,
+    observation_ensemble_dir: Path | None = None,
+    observation_ensemble_source_decoders: tuple[str, ...] = DEFAULT_ENSEMBLE_SOURCE_DECODERS,
+    observation_ensemble_weights: tuple[float, ...] | None = None,
+    observation_ensemble_source_emission_mode: str | None = "calibrated",
+    observation_ensemble_baseline_window: tuple[float, float] | None = DEFAULT_ENSEMBLE_BASELINE_WINDOW,
+    observation_ensemble_baseline_group_columns: tuple[str, ...] = DEFAULT_ENSEMBLE_BASELINE_GROUP_COLUMNS,
     temporal_smoothing_dir: Path | None = None,
     temporal_smoothing_fit_window: tuple[float, float] | None = DEFAULT_FIT_WINDOW,
     temporal_smoothing_stay_grid_size: int = 200,
@@ -239,6 +309,8 @@ def run_benchmark_manifest(
     manifest_dir = manifest_csv.parent
     out_dir.mkdir(parents=True, exist_ok=True)
     if temporal_smoothing_dir is not None and observation_dir is None:
+        observation_dir = out_dir / "observations"
+    if observation_ensemble_dir is not None and observation_dir is None:
         observation_dir = out_dir / "observations"
     result_csvs: list[Path] = []
     calibration_csvs: list[Path] = []
@@ -357,6 +429,22 @@ def run_benchmark_manifest(
 
     aggregate_result_csvs = list(result_csvs)
     aggregate_observation_csvs = list(observation_csvs)
+    ensemble_observation_csv: Path | None = None
+    ensemble_metric_csv: Path | None = None
+    if observation_ensemble_dir is not None:
+        ensemble_observation_csv, ensemble_metric_csv = _write_observation_ensemble(
+            observation_csvs,
+            out_dir=observation_ensemble_dir,
+            resume=resume,
+            source_decoders=tuple(normalize_decoder_name(decoder) for decoder in observation_ensemble_source_decoders),
+            weights=observation_ensemble_weights,
+            source_emission_mode=observation_ensemble_source_emission_mode,
+            baseline_window=observation_ensemble_baseline_window,
+            baseline_group_columns=observation_ensemble_baseline_group_columns,
+            calibration_bins=calibration_bins,
+        )
+        aggregate_result_csvs.append(ensemble_metric_csv)
+        aggregate_observation_csvs.append(ensemble_observation_csv)
     smoothed_observation_csv: Path | None = None
     smoothed_metric_csv: Path | None = None
     if temporal_smoothing_dir is not None:
@@ -414,6 +502,8 @@ def run_benchmark_manifest(
         skipped_existing=skipped_existing,
         smoothed_observation_csv=smoothed_observation_csv,
         smoothed_metric_csv=smoothed_metric_csv,
+        ensemble_observation_csv=ensemble_observation_csv,
+        ensemble_metric_csv=ensemble_metric_csv,
     )
 
 
@@ -436,7 +526,7 @@ def main() -> None:
     parser.add_argument("--step-ms", type=float, default=10.0)
     parser.add_argument("--n-splits", type=int, default=5)
     parser.add_argument("--max-iter", type=int, default=1000)
-    parser.add_argument("--decoder", choices=DECODER_CHOICES, default="logistic")
+    parser.add_argument("--decoder", choices=DECODER_CLI_CHOICES, default="logistic")
     parser.add_argument("--emission-mode", choices=EMISSION_RUN_CHOICES, default="calibrated")
     parser.add_argument("--feature-preprocessor", choices=(*FEATURE_PREPROCESSOR_CHOICES, "pca-whiten"), default="none")
     parser.add_argument("--pca-components")
@@ -448,6 +538,29 @@ def main() -> None:
     parser.add_argument("--calibration-dir", type=Path)
     parser.add_argument("--calibration-bins", type=int, default=10)
     parser.add_argument("--observation-dir", type=Path, help="Optional directory for held-out trial/time probability observation CSVs.")
+    parser.add_argument(
+        "--observation-ensemble-dir",
+        type=Path,
+        help="Optional directory for a baseline-debiased log-probability ensemble built from held-out decoder observations.",
+    )
+    parser.add_argument(
+        "--observation-ensemble-source-decoder",
+        action="append",
+        choices=DECODER_CLI_CHOICES,
+        dest="observation_ensemble_source_decoders",
+        help="Source decoder used by --observation-ensemble-dir. Repeat to override the default logistic+linear_svm ensemble.",
+    )
+    parser.add_argument(
+        "--observation-ensemble-weight",
+        action="append",
+        type=float,
+        dest="observation_ensemble_weights",
+        help="Source decoder weight, repeated in the same order as --observation-ensemble-source-decoder.",
+    )
+    parser.add_argument("--observation-ensemble-source-emission-mode", default="calibrated")
+    parser.add_argument("--observation-ensemble-baseline-window", type=float, nargs=2, default=DEFAULT_ENSEMBLE_BASELINE_WINDOW, metavar=("START", "STOP"))
+    parser.add_argument("--no-observation-ensemble-baseline-debiasing", action="store_true")
+    parser.add_argument("--observation-ensemble-baseline-group-column", action="append", dest="observation_ensemble_baseline_group_columns")
     parser.add_argument("--temporal-smoothing-dir", type=Path, help="Optional directory for smoothed observations and metrics.")
     parser.add_argument("--temporal-smoothing-fit-window", type=float, nargs=2, default=DEFAULT_FIT_WINDOW, metavar=("START", "STOP"))
     parser.add_argument(
@@ -492,6 +605,14 @@ def main() -> None:
         calibration_dir=args.calibration_dir,
         calibration_bins=args.calibration_bins,
         observation_dir=args.observation_dir,
+        observation_ensemble_dir=args.observation_ensemble_dir,
+        observation_ensemble_source_decoders=tuple(args.observation_ensemble_source_decoders or DEFAULT_ENSEMBLE_SOURCE_DECODERS),
+        observation_ensemble_weights=tuple(args.observation_ensemble_weights) if args.observation_ensemble_weights is not None else None,
+        observation_ensemble_source_emission_mode=args.observation_ensemble_source_emission_mode,
+        observation_ensemble_baseline_window=None
+        if args.no_observation_ensemble_baseline_debiasing
+        else tuple(args.observation_ensemble_baseline_window),
+        observation_ensemble_baseline_group_columns=tuple(args.observation_ensemble_baseline_group_columns or DEFAULT_ENSEMBLE_BASELINE_GROUP_COLUMNS),
         temporal_smoothing_dir=args.temporal_smoothing_dir,
         temporal_smoothing_fit_window=None
         if args.temporal_smoothing_full_sequence_fit
@@ -513,6 +634,10 @@ def main() -> None:
         print(f"Wrote {len(run.calibration_csvs)} calibration bin file(s).")
     if run.observation_csvs:
         print(f"Wrote {len(run.observation_csvs)} probability observation file(s).")
+    if run.ensemble_observation_csv is not None:
+        print(f"Wrote ensemble observations: {run.ensemble_observation_csv}")
+    if run.ensemble_metric_csv is not None:
+        print(f"Wrote ensemble metrics: {run.ensemble_metric_csv}")
     if run.smoothed_observation_csv is not None:
         print(f"Wrote smoothed observations: {run.smoothed_observation_csv}")
     if run.smoothed_metric_csv is not None:

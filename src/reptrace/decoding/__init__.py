@@ -1,18 +1,27 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from typing import Any
 
 import numpy as np
+from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import log_loss
 from sklearn.model_selection import GridSearchCV, StratifiedGroupKFold, StratifiedKFold
+from sklearn.naive_bayes import GaussianNB
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
 
+from reptrace.decoding.classifiers import (
+    CLASSIFIER_REGISTRY,
+    get_default_classifier_param,
+    train_multiclass_classifier,
+)
 from reptrace.decoding.sampling import (
     CLASS_LIMIT_SELECTION_MODES as CLASS_LIMIT_SELECTION_MODES,
     DEFAULT_CLASS_LIMIT_SEED as DEFAULT_CLASS_LIMIT_SEED,
@@ -21,12 +30,171 @@ from reptrace.decoding.sampling import (
     normalize_class_limit_selection as normalize_class_limit_selection,
     select_class_limited_indices as select_class_limited_indices,
 )
+from reptrace.metrics import brier_score_multiclass, expected_calibration_error
 
-DECODER_CHOICES = ("logistic", "lda", "shrinkage_lda", "linear_svm")
+BUILTIN_DECODER_CHOICES = ("logistic", "gaussian_nb", "lda", "shrinkage_lda", "linear_svm")
+DECODER_ALIASES = (
+    "nb",
+    "naive-bayes",
+    "gaussian-naive-bayes",
+    "svm",
+    "linear-svm",
+    "lda-shrinkage",
+    "shrinkage-lda",
+)
+DECODER_CHOICES = tuple(
+    dict.fromkeys(
+        (
+            *BUILTIN_DECODER_CHOICES,
+            *CLASSIFIER_REGISTRY.keys(),
+            *DECODER_ALIASES,
+        )
+    )
+)
+DECODER_CLI_CHOICES = DECODER_CHOICES
 EMISSION_MODE_CHOICES = ("calibrated", "uncalibrated")
 FEATURE_PREPROCESSOR_CHOICES = ("none", "pca", "pca_whiten")
-TUNING_SCORING_CHOICES = ("accuracy", "balanced_accuracy", "neg_log_loss")
+TUNING_SCORING_CHOICES = ("accuracy", "balanced_accuracy", "neg_log_loss", "neg_brier", "neg_ece")
 DEFAULT_TUNING_C_GRID = (0.01, 0.1, 1.0, 10.0, 100.0)
+DEFAULT_TUNING_VAR_SMOOTHING_GRID = (1e-12, 1e-10, 1e-9, 1e-8, 1e-6)
+
+
+def _registry_decoder_lookup() -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    for registry_name in CLASSIFIER_REGISTRY:
+        for alias in {
+            registry_name,
+            registry_name.lower(),
+            registry_name.replace("-", "_"),
+            registry_name.lower().replace("-", "_"),
+        }:
+            lookup[alias] = registry_name
+    return lookup
+
+
+_REGISTRY_DECODER_LOOKUP = _registry_decoder_lookup()
+
+
+def _normalize_registry_decoder_name_or_none(name: str) -> str | None:
+    raw = str(name).strip()
+    candidates = (
+        raw,
+        raw.lower(),
+        raw.replace("_", "-"),
+        raw.lower().replace("_", "-"),
+        raw.replace("-", "_"),
+        raw.lower().replace("-", "_"),
+    )
+    for candidate in candidates:
+        if candidate in _REGISTRY_DECODER_LOOKUP:
+            return _REGISTRY_DECODER_LOOKUP[candidate]
+    return None
+
+
+def normalize_registry_decoder_name(name: str) -> str:
+    """Normalize aliases for classifier-registry decoders."""
+
+    normalized = _normalize_registry_decoder_name_or_none(name)
+    if normalized is None:
+        supported = ", ".join(sorted(CLASSIFIER_REGISTRY))
+        raise ValueError(f"Unknown registry decoder '{name}'. Available registry decoders: {supported}.")
+    return normalized
+
+
+class RegistryDecoder(ClassifierMixin, BaseEstimator):
+    """Scikit-learn estimator adapter for ``decoding.classifiers`` entries.
+
+    The time-resolved MNE decoder path expects estimators that can be placed in
+    a sklearn pipeline and, optionally, wrapped in ``CalibratedClassifierCV``.
+    Most legacy registry classifiers are factory functions rather than sklearn
+    estimators themselves; this adapter exposes them through the standard
+    ``fit``/``predict``/``decision_function``/``predict_proba`` API.
+    """
+
+    def __init__(self, classifier: str, classifier_param: Any = None, random_state: int | None = 13):
+        self.classifier = classifier
+        self.classifier_param = classifier_param
+        self.random_state = random_state
+
+    def fit(self, features: Sequence[Sequence[float]] | np.ndarray, labels: Sequence | np.ndarray):
+        classifier = normalize_registry_decoder_name(self.classifier)
+        classifier_param = get_default_classifier_param(classifier) if self.classifier_param is None else self.classifier_param
+        self.model_ = train_multiclass_classifier(
+            features,
+            labels,
+            classifier,
+            classifier_param,
+            random_state=self.random_state,
+        )
+        self.classes_ = np.asarray(getattr(self.model_, "classes_", np.unique(labels)))
+        self.classifier_ = classifier
+        self.classifier_param_ = classifier_param
+        return self
+
+    def _raw_model(self):
+        if not hasattr(self, "model_"):
+            raise RuntimeError("RegistryDecoder must be fitted before prediction.")
+        return getattr(self.model_, "model", self.model_)
+
+    def predict(self, features: Sequence[Sequence[float]] | np.ndarray) -> np.ndarray:
+        if not hasattr(self, "model_"):
+            raise RuntimeError("RegistryDecoder must be fitted before prediction.")
+        return np.asarray(self.model_.predict(features))
+
+    def decision_function(self, features: Sequence[Sequence[float]] | np.ndarray) -> np.ndarray:
+        raw_model = self._raw_model()
+        if hasattr(raw_model, "decision_function"):
+            scores = np.asarray(raw_model.decision_function(features), dtype=float)
+            if scores.ndim == 2 and getattr(self, "classes_", np.array([])).shape[0] == 2:
+                return scores[:, 1] - scores[:, 0]
+            return scores
+        if hasattr(raw_model, "predict_proba"):
+            probabilities = np.asarray(raw_model.predict_proba(features), dtype=float)
+            if probabilities.ndim == 2 and probabilities.shape[1] == 2:
+                return np.log(np.clip(probabilities[:, 1], 1e-12, 1.0)) - np.log(np.clip(probabilities[:, 0], 1e-12, 1.0))
+            return np.log(np.clip(probabilities, 1e-12, 1.0))
+        return np.asarray(self.model_.decision_function(features), dtype=float)
+
+    def predict_proba(self, features: Sequence[Sequence[float]] | np.ndarray) -> np.ndarray:
+        if not hasattr(self, "model_"):
+            raise RuntimeError("RegistryDecoder must be fitted before prediction.")
+        if not hasattr(self.model_, "predict_proba"):
+            raise AttributeError(f"{self.classifier!r} does not provide predict_proba")
+        return np.asarray(self.model_.predict_proba(features), dtype=float)
+
+
+def _make_registry_decoder_pipeline(
+    name: str,
+    *,
+    feature_preprocessor: str = "none",
+    pca_components: int | float | str | None = None,
+    classifier_param: Any = None,
+    random_state: int | None = 13,
+):
+    return make_pipeline(
+        StandardScaler(),
+        *_feature_preprocessor_steps(feature_preprocessor, pca_components),
+        RegistryDecoder(
+            normalize_registry_decoder_name(name),
+            classifier_param=classifier_param,
+            random_state=random_state,
+        ),
+    )
+
+
+def _registry_tuning_param_grid(name: str, c_grid: Sequence[float]) -> dict[str, Sequence[Any]]:
+    registry_name = normalize_registry_decoder_name(name)
+    if registry_name in {"multiclass-svm", "multiclass-svm-weighted", "multinomial-logistic"}:
+        return {"registrydecoder__classifier_param": c_grid}
+    if registry_name == "knn":
+        return {"registrydecoder__classifier_param": (3, 5, 7, 11)}
+    if registry_name in {"random-forest", "gradient-boosting", "xgboost"}:
+        return {"registrydecoder__classifier_param": (50, 100, 200)}
+    return {}
+
+
+def _calibrated_param_grid(estimator, param_grid: dict[str, Sequence[Any]]) -> dict[str, Sequence[Any]]:
+    return {_calibrated_estimator_param(estimator, parameter): values for parameter, values in param_grid.items()}
 
 
 def make_logistic_decoder(
@@ -55,6 +223,8 @@ def make_decoder(
     tuning_cv: int | Sequence[tuple[np.ndarray, np.ndarray]] = 3,
     tuning_scoring: str = "accuracy",
     tuning_c_grid: Sequence[float] | str | None = None,
+    classifier_param: Any = None,
+    random_state: int | None = 13,
 ):
     """Create a standard probability-producing decoder by name.
 
@@ -80,6 +250,8 @@ def make_decoder(
             cv=tuning_cv,
             scoring=tuning_scoring,
             c_grid=tuning_c_grid,
+            classifier_param=classifier_param,
+            random_state=random_state,
         )
 
     if normalized == "logistic":
@@ -91,6 +263,12 @@ def make_decoder(
                 max_iter=max_iter,
                 solver="lbfgs",
             ),
+        )
+    if normalized == "gaussian_nb":
+        return make_pipeline(
+            StandardScaler(),
+            *feature_steps,
+            GaussianNB(),
         )
     if normalized == "lda":
         return make_pipeline(
@@ -105,18 +283,34 @@ def make_decoder(
             LinearDiscriminantAnalysis(solver="lsqr", shrinkage="auto"),
         )
 
-    linear_svm = make_pipeline(
-        StandardScaler(),
-        *feature_steps,
-        LinearSVC(
-            class_weight="balanced",
-            max_iter=max_iter,
-        ),
+    if normalized == "linear_svm":
+        linear_svm = make_pipeline(
+            StandardScaler(),
+            *feature_steps,
+            LinearSVC(
+                class_weight="balanced",
+                max_iter=max_iter,
+            ),
+        )
+        if emission_mode == "uncalibrated":
+            return linear_svm
+        return _make_calibrated_classifier(
+            linear_svm,
+            method="sigmoid",
+            cv=3,
+        )
+
+    registry_decoder = _make_registry_decoder_pipeline(
+        normalized,
+        feature_preprocessor=feature_preprocessor,
+        pca_components=pca_components,
+        classifier_param=classifier_param,
+        random_state=random_state,
     )
     if emission_mode == "uncalibrated":
-        return linear_svm
+        return registry_decoder
     return _make_calibrated_classifier(
-        linear_svm,
+        registry_decoder,
         method="sigmoid",
         cv=3,
     )
@@ -132,11 +326,13 @@ def make_tuned_decoder(
     cv: int | Sequence[tuple[np.ndarray, np.ndarray]] = 3,
     scoring: str = "accuracy",
     c_grid: Sequence[float] | str | None = None,
+    classifier_param: Any = None,
+    random_state: int | None = 13,
 ):
     """Create a decoder with inner-CV hyperparameter selection.
 
     Logistic regression and linear SVM tune the regularization strength ``C``.
-    LDA compares the default SVD solver with shrinkage LDA
+    Gaussian NB tunes variance smoothing. LDA compares the default SVD solver with shrinkage LDA
     (``solver='lsqr', shrinkage='auto'``), which is often better conditioned for
     high-dimensional M/EEG windows.
     """
@@ -157,6 +353,13 @@ def make_tuned_decoder(
             ),
         )
         param_grid = {"logisticregression__C": c_grid}
+    elif normalized == "gaussian_nb":
+        estimator = make_pipeline(
+            StandardScaler(),
+            *feature_steps,
+            GaussianNB(),
+        )
+        param_grid = {"gaussiannb__var_smoothing": DEFAULT_TUNING_VAR_SMOOTHING_GRID}
     elif normalized == "lda":
         estimator = make_pipeline(
             StandardScaler(),
@@ -180,9 +383,7 @@ def make_tuned_decoder(
             LinearDiscriminantAnalysis(solver="lsqr"),
         )
         param_grid = {"lineardiscriminantanalysis__shrinkage": ["auto", 0.1, 0.3, 0.5, 0.7, 0.9]}
-    else:
-        if emission_mode == "uncalibrated" and scoring == "neg_log_loss":
-            raise ValueError("neg_log_loss tuning requires probability estimates; use calibrated emissions for linear_svm.")
+    elif normalized == "linear_svm":
         linear_svm = make_pipeline(
             StandardScaler(),
             *feature_steps,
@@ -197,11 +398,26 @@ def make_tuned_decoder(
         else:
             estimator = _make_calibrated_classifier(linear_svm, method="sigmoid", cv=3)
             param_grid = {_calibrated_estimator_param(estimator, "linearsvc__C"): c_grid}
+    else:
+        registry_name = normalize_registry_decoder_name(normalized)
+        registry_decoder = _make_registry_decoder_pipeline(
+            registry_name,
+            feature_preprocessor=feature_preprocessor,
+            pca_components=pca_components,
+            classifier_param=classifier_param,
+            random_state=random_state,
+        )
+        param_grid = _registry_tuning_param_grid(registry_name, c_grid)
+        if emission_mode == "uncalibrated":
+            estimator = registry_decoder
+        else:
+            estimator = _make_calibrated_classifier(registry_decoder, method="sigmoid", cv=3)
+            param_grid = _calibrated_param_grid(estimator, param_grid)
 
     return GridSearchCV(
         estimator=estimator,
         param_grid=param_grid,
-        scoring=scoring,
+        scoring=make_tuning_scorer(scoring, emission_mode=emission_mode),
         cv=cv,
         refit=True,
     )
@@ -248,16 +464,79 @@ def normalize_tuning_scoring(scoring: str) -> str:
     return normalized
 
 
+def make_tuning_scorer(scoring: str, *, emission_mode: str = "calibrated") -> str | Callable:
+    """Return a GridSearchCV scorer for decoder hyperparameter tuning.
+
+    Accuracy-oriented objectives are forwarded to scikit-learn by name. Probability
+    objectives are implemented here so they use the same calibrated or
+    score-derived emissions that RepTrace writes to the held-out observation
+    tables. This keeps model selection aligned with downstream temporal-state
+    inference, where probability quality matters more than the hard class label.
+    """
+    normalized = normalize_tuning_scoring(scoring)
+    emission_mode = normalize_emission_mode(emission_mode)
+    if normalized in {"accuracy", "balanced_accuracy"}:
+        return normalized
+    return _make_probability_tuning_scorer(normalized, emission_mode=emission_mode)
+
+
+def _make_probability_tuning_scorer(scoring: str, *, emission_mode: str) -> Callable:
+    def scorer(estimator, features: np.ndarray, labels: np.ndarray) -> float:
+        probabilities = predict_emission_probabilities(estimator, features, emission_mode=emission_mode)
+        label_indices = _labels_to_probability_columns(labels, estimator=estimator, n_classes=probabilities.shape[1])
+        if scoring == "neg_log_loss":
+            return -float(log_loss(label_indices, probabilities, labels=np.arange(probabilities.shape[1])))
+        if scoring == "neg_brier":
+            return -brier_score_multiclass(probabilities, label_indices)
+        if scoring == "neg_ece":
+            return -expected_calibration_error(probabilities, label_indices)
+        raise ValueError(f"Unknown probability tuning scoring '{scoring}'.")
+
+    return scorer
+
+
+def _labels_to_probability_columns(
+    labels: np.ndarray,
+    *,
+    estimator,
+    n_classes: int,
+) -> np.ndarray:
+    """Map estimator labels to probability-column indices for multiclass metrics."""
+    labels = np.asarray(labels)
+    classes = getattr(estimator, "classes_", None)
+    if classes is not None:
+        classes = np.asarray(classes)
+        if len(classes) != n_classes:
+            raise ValueError(f"Estimator reports {len(classes)} classes but predicted {n_classes} probability columns.")
+        class_to_index = {class_label: class_index for class_index, class_label in enumerate(classes.tolist())}
+        try:
+            return np.asarray([class_to_index[label] for label in labels.tolist()], dtype=int)
+        except KeyError as exc:
+            raise ValueError(f"Validation label {exc.args[0]!r} was not seen by the fitted estimator.") from exc
+
+    if not np.issubdtype(labels.dtype, np.integer):
+        raise ValueError("Probability tuning metrics require fitted estimator classes for non-integer labels.")
+    label_indices = labels.astype(int, copy=False)
+    if np.any((label_indices < 0) | (label_indices >= n_classes)):
+        raise ValueError("Integer labels must be valid probability-column indices.")
+    return label_indices
+
+
 def normalize_decoder_name(name: str) -> str:
     """Normalize decoder aliases to the names used in result tables."""
-    normalized = name.lower().replace("-", "_")
+    normalized = name.strip().lower().replace("-", "_")
+    if normalized in {"nb", "naive_bayes", "gaussian_naive_bayes"}:
+        return "gaussian_nb"
     if normalized == "svm":
         return "linear_svm"
     if normalized in {"lda_shrinkage", "shrinkage_lda", "shrinkagelda"}:
         return "shrinkage_lda"
-    if normalized not in DECODER_CHOICES:
-        raise ValueError(f"Unknown decoder '{name}'. Available decoders: {', '.join(DECODER_CHOICES)}.")
-    return normalized
+    if normalized in BUILTIN_DECODER_CHOICES:
+        return normalized
+    registry_name = _normalize_registry_decoder_name_or_none(name)
+    if registry_name is not None:
+        return registry_name
+    raise ValueError(f"Unknown decoder '{name}'. Available decoders: {', '.join(DECODER_CHOICES)}.")
 
 
 def normalize_emission_mode(mode: str) -> str:

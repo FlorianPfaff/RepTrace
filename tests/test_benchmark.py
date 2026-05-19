@@ -3,6 +3,7 @@ from pathlib import Path
 import pandas as pd
 
 from reptrace.benchmark import run_benchmark_manifest
+from reptrace.observation_ensemble import DEFAULT_ENSEMBLE_DECODER
 
 
 def _fake_decode(**kwargs):
@@ -201,6 +202,90 @@ def test_run_benchmark_manifest_passes_observation_output_paths(tmp_path: Path, 
     assert calls[0]["subject"] == "sub-01"
     assert run.observation_csvs == [calls[0]["observation_out_path"]]
     assert pd.read_csv(run.observation_csvs[0])["prob_class_1"].tolist() == [0.7]
+
+
+def test_run_benchmark_manifest_can_build_baseline_debiased_observation_ensemble(tmp_path: Path, monkeypatch):
+    manifest = tmp_path / "manifest.csv"
+    manifest.write_text(
+        "subject,epochs,metadata_csv,label_column,decoder\n"
+        "sub-01,data/sub-01_epo.fif,data/sub-01_metadata.csv,condition,logistic\n"
+        "sub-01,data/sub-01_epo.fif,data/sub-01_metadata.csv,condition,linear_svm\n",
+        encoding="utf-8",
+    )
+
+    def fake_decode(**kwargs):
+        decoder = kwargs.get("decoder", "logistic")
+        subject = kwargs.get("subject", "sub-01")
+        probabilities = {
+            "logistic": {-0.20: 0.70, 0.10: 0.80},
+            "linear_svm": {-0.20: 0.80, 0.10: 0.95},
+        }[decoder]
+        result_rows = []
+        observation_rows = []
+        for time, p0 in probabilities.items():
+            p1 = 1.0 - p0
+            result_rows.append(
+                {
+                    "fold": 0,
+                    "decoder": decoder,
+                    "emission_mode": "calibrated",
+                    "time": time,
+                    "accuracy": float(p0 >= p1),
+                    "log_loss": 0.4,
+                    "brier": 0.2,
+                    "ece": 0.1,
+                    "n_test": 2,
+                }
+            )
+            for sequence_id in (0, 1):
+                observation_rows.append(
+                    {
+                        "subject": subject,
+                        "fold": 0,
+                        "decoder": decoder,
+                        "emission_mode": "calibrated",
+                        "time": time,
+                        "window_start": time - 0.01,
+                        "window_stop": time + 0.01,
+                        "sample_index": sequence_id,
+                        "sequence_id": sequence_id,
+                        "true_label": 0,
+                        "true_class": "animate",
+                        "predicted_label": 0 if p0 >= p1 else 1,
+                        "predicted_class": "animate" if p0 >= p1 else "inanimate",
+                        "probability_true_class": p0,
+                        "confidence": max(p0, p1),
+                        "class_0": "animate",
+                        "class_1": "inanimate",
+                        "prob_class_0": p0,
+                        "prob_class_1": p1,
+                    }
+                )
+        out_path = kwargs["out_path"]
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(result_rows).to_csv(out_path, index=False)
+        observation_out_path = kwargs["observation_out_path"]
+        observation_out_path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(observation_rows).to_csv(observation_out_path, index=False)
+        return pd.DataFrame(result_rows)
+
+    monkeypatch.setattr("reptrace.benchmark.run_time_resolved_decode", fake_decode)
+
+    run = run_benchmark_manifest(
+        manifest,
+        out_dir=tmp_path / "results",
+        observation_ensemble_dir=tmp_path / "results" / "observation_ensemble",
+        observation_ensemble_baseline_window=(-0.25, -0.15),
+    )
+
+    assert run.ensemble_observation_csv is not None and run.ensemble_observation_csv.exists()
+    assert run.ensemble_metric_csv is not None and run.ensemble_metric_csv.exists()
+    ensemble = pd.read_csv(run.ensemble_observation_csv)
+    assert ensemble["decoder"].unique().tolist() == [DEFAULT_ENSEMBLE_DECODER]
+    assert ensemble.loc[ensemble["time"] == -0.20, "prob_class_0"].round(12).tolist() == [0.5, 0.5]
+    assert ensemble.loc[ensemble["time"] == 0.10, "prob_class_0"].gt(0.70).all()
+    summary = pd.read_csv(run.aggregate_csv)
+    assert DEFAULT_ENSEMBLE_DECODER in set(summary["decoder"])
 
 
 def test_run_benchmark_manifest_can_compare_temporal_smoothing(tmp_path: Path, monkeypatch):

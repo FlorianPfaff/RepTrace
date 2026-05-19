@@ -15,7 +15,7 @@ import pandas as pd
 from pandas.errors import EmptyDataError
 
 from reptrace.benchmark import run_benchmark_manifest
-from reptrace.decoding import DECODER_CHOICES, normalize_decoder_name
+from reptrace.decoding import DECODER_CLI_CHOICES, normalize_decoder_name
 from reptrace.emission_compare import compare_temporal_summary
 from reptrace.plot_time_decode import plot_time_decode_results
 from reptrace.semantic_stages import analyze_semantic_stages
@@ -631,7 +631,7 @@ def main() -> None:
     parser.add_argument("--data-root", type=Path, help="Directory containing staged NOD sub-*_epo.fif and sub-*_events.csv files.")
     parser.add_argument("--compact-export-dir", type=Path, help="Optional directory for compact exported artifacts.")
     parser.add_argument("--task", action="append", choices=DEFAULT_TASK_IDS, dest="task_ids", help="Task to run. Repeat to select multiple tasks.")
-    parser.add_argument("--decoders", nargs="+", choices=DECODER_CHOICES, default=list(DEFAULT_DECODERS))
+    parser.add_argument("--decoders", nargs="+", choices=DECODER_CLI_CHOICES, default=list(DEFAULT_DECODERS))
     parser.add_argument("--n-permutations", type=int, default=100)
     parser.add_argument("--random-seed", type=int, default=13)
     parser.add_argument("--stay-grid-size", type=int, default=200)

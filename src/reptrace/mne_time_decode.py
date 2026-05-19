@@ -12,7 +12,7 @@ from sklearn.metrics import accuracy_score, log_loss
 from sklearn.preprocessing import LabelEncoder
 
 from reptrace.decoding import (
-    DECODER_CHOICES,
+    DECODER_CLI_CHOICES,
     EMISSION_MODE_CHOICES,
     FEATURE_PREPROCESSOR_CHOICES,
     TUNING_SCORING_CHOICES,
@@ -33,6 +33,8 @@ from reptrace.observations import ProbabilityObservationTable, stable_hash
 
 EMISSION_RUN_CHOICES = (*EMISSION_MODE_CHOICES, "both")
 FEATURE_PREPROCESSOR_RUN_CHOICES = (*FEATURE_PREPROCESSOR_CHOICES, "pca-whiten")
+RESULT_SELECTION_METRIC_CHOICES = ("accuracy", "log_loss", "brier", "ece")
+RESULT_SELECTION_MINIMIZE_METRICS = {"log_loss", "brier", "ece"}
 TimeWindow = tuple[int, int, float]
 TemporalTrainWindow = tuple[float, float]
 
@@ -161,6 +163,15 @@ def _train_window_summary(
         float(min(epochs.times[window[0]] for window in train_windows)),
         float(max(epochs.times[window[1] - 1] for window in train_windows)),
     )
+
+
+def _best_time_by_metric(time_summary: pd.DataFrame, metric: str) -> float:
+    """Return the best time index for a metric aggregated over folds."""
+    if metric not in RESULT_SELECTION_METRIC_CHOICES:
+        raise ValueError(f"Unknown selection metric '{metric}'.")
+    if metric in RESULT_SELECTION_MINIMIZE_METRICS:
+        return float(time_summary[metric].idxmin())
+    return float(time_summary[metric].idxmax())
 
 
 def _model_hash(
@@ -684,7 +695,7 @@ def main() -> None:
     parser.add_argument("--step-ms", type=float, default=10.0)
     parser.add_argument("--n-splits", type=int, default=5)
     parser.add_argument("--max-iter", type=int, default=1000)
-    parser.add_argument("--decoder", choices=DECODER_CHOICES, default="logistic")
+    parser.add_argument("--decoder", choices=DECODER_CLI_CHOICES, default="logistic")
     parser.add_argument("--emission-mode", choices=EMISSION_RUN_CHOICES, default="calibrated")
     parser.add_argument("--feature-preprocessor", choices=FEATURE_PREPROCESSOR_RUN_CHOICES, default="none")
     parser.add_argument(
@@ -694,6 +705,7 @@ def main() -> None:
     parser.add_argument("--tune-hyperparameters", action="store_true", help="Use nested inner-CV hyperparameter selection inside each outer train fold.")
     parser.add_argument("--tuning-cv-splits", type=int, default=3, help="Maximum number of inner CV folds for --tune-hyperparameters.")
     parser.add_argument("--tuning-scoring", choices=TUNING_SCORING_CHOICES, default="accuracy", help="Inner-CV objective for --tune-hyperparameters.")
+    parser.add_argument("--selection-metric", choices=RESULT_SELECTION_METRIC_CHOICES, default="accuracy", help="Metric used only for the console 'best time' summary.")
     parser.add_argument(
         "--tuning-c-grid",
         default=",".join(str(value) for value in parse_c_grid(None)),
@@ -747,8 +759,13 @@ def main() -> None:
         print(f"Wrote probability observations: {args.observations_out}")
     for emission_mode_name, summary in results.groupby("emission_mode", sort=True):
         time_summary = summary.groupby("time")[["accuracy", "log_loss", "brier", "ece"]].mean()
-        best_time = time_summary["accuracy"].idxmax()
-        print(f"Best {emission_mode_name} mean accuracy: {time_summary.loc[best_time, 'accuracy']:.3f} at {best_time:.3f}s")
+        best_time = _best_time_by_metric(time_summary, args.selection_metric)
+        best_value = time_summary.loc[best_time, args.selection_metric]
+        direction = "lowest" if args.selection_metric in RESULT_SELECTION_MINIMIZE_METRICS else "highest"
+        print(
+            f"Best {emission_mode_name} mean {args.selection_metric} "
+            f"({direction}): {best_value:.3f} at {best_time:.3f}s"
+        )
 
 
 if __name__ == "__main__":
