@@ -23,13 +23,15 @@ from reptrace.decoding.sampling import (
     select_class_limited_indices as select_class_limited_indices,
 )
 
-DECODER_CHOICES = ("logistic", "lda", "shrinkage_lda", "linear_svm")
+DECODER_CHOICES = ("logistic", "elastic_net_logistic", "lda", "shrinkage_lda", "linear_svm")
 EMISSION_MODE_CHOICES = ("calibrated", "uncalibrated")
 FEATURE_PREPROCESSOR_CHOICES = ("none", "pca", "pca_whiten", "anova_select")
 TUNING_SCORING_CHOICES = ("accuracy", "balanced_accuracy", "neg_log_loss")
 DEFAULT_TUNING_C_GRID = (0.01, 0.1, 1.0, 10.0, 100.0)
 DEFAULT_ANOVA_SELECT_PERCENTILE = 20
 ANOVA_SELECT_PERCENTILE_GRID = (10, 20, 40, 60)
+DEFAULT_ELASTIC_NET_L1_RATIO = 0.5
+ELASTIC_NET_L1_RATIO_GRID = (0.15, 0.5, 0.85)
 
 
 def make_logistic_decoder(
@@ -95,6 +97,18 @@ def make_decoder(
                 solver="lbfgs",
             ),
         )
+    if normalized == "elastic_net_logistic":
+        return make_pipeline(
+            StandardScaler(),
+            *feature_steps,
+            LogisticRegression(
+                class_weight="balanced",
+                l1_ratio=DEFAULT_ELASTIC_NET_L1_RATIO,
+                max_iter=max_iter,
+                random_state=13,
+                solver="saga",
+            ),
+        )
     if normalized == "lda":
         return make_pipeline(
             StandardScaler(),
@@ -139,7 +153,8 @@ def make_tuned_decoder(
     """Create a decoder with inner-CV hyperparameter selection.
 
     Logistic regression and linear SVM tune the regularization strength ``C``.
-    LDA compares the default SVD solver with shrinkage LDA
+    Elastic-net logistic regression tunes both ``C`` and the L1/L2 mixing
+    ratio. LDA compares the default SVD solver with shrinkage LDA
     (``solver='lsqr', shrinkage='auto'``), which is often better conditioned for
     high-dimensional M/EEG windows.
     """
@@ -161,6 +176,22 @@ def make_tuned_decoder(
         )
         param_grid = {"logisticregression__C": c_grid}
         param_grid = _with_feature_preprocessor_tuning(estimator, param_grid, feature_preprocessor)
+    elif normalized == "elastic_net_logistic":
+        estimator = make_pipeline(
+            StandardScaler(),
+            *feature_steps,
+            LogisticRegression(
+                class_weight="balanced",
+                l1_ratio=DEFAULT_ELASTIC_NET_L1_RATIO,
+                max_iter=max_iter,
+                random_state=13,
+                solver="saga",
+            ),
+        )
+        param_grid = {
+            "logisticregression__C": c_grid,
+            "logisticregression__l1_ratio": ELASTIC_NET_L1_RATIO_GRID,
+        }
     elif normalized == "lda":
         estimator = make_pipeline(
             StandardScaler(),
@@ -278,6 +309,8 @@ def normalize_decoder_name(name: str) -> str:
     normalized = name.lower().replace("-", "_")
     if normalized == "svm":
         return "linear_svm"
+    if normalized in {"elasticnet_logistic", "logistic_elastic_net", "elastic_net_logreg"}:
+        return "elastic_net_logistic"
     if normalized in {"lda_shrinkage", "shrinkage_lda", "shrinkagelda"}:
         return "shrinkage_lda"
     if normalized not in DECODER_CHOICES:
