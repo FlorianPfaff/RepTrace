@@ -14,6 +14,8 @@ python -m reptrace.temporal_smoothing \
 For benchmark comparisons, prefer `reptrace.benchmark
 --temporal-smoothing-dir`. That runs smoothing on the exact held-out
 observations from the decoder run and aggregates raw plus smoothed metrics in
-one summary table.
+one summary table. The companion `provenance.csv` records the raw and smoothed
+emission modes side by side with selected accuracy, log loss, and ECE, so
+calibration-only changes are easy to spot.
 
 ::: reptrace.temporal_smoothing

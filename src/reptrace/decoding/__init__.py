@@ -22,7 +22,7 @@ from reptrace.decoding.sampling import (
     select_class_limited_indices as select_class_limited_indices,
 )
 
-DECODER_CHOICES = ("logistic", "sparse_logistic", "lda", "linear_svm")
+DECODER_CHOICES = ("logistic", "sparse_logistic", "lda", "shrinkage_lda", "linear_svm")
 EMISSION_MODE_CHOICES = ("calibrated", "uncalibrated")
 FEATURE_PREPROCESSOR_CHOICES = ("none", "pca", "pca_whiten")
 TUNING_SCORING_CHOICES = ("accuracy", "balanced_accuracy", "neg_log_loss")
@@ -110,6 +110,12 @@ def make_decoder(
             *feature_steps,
             LinearDiscriminantAnalysis(solver="svd"),
         )
+    if normalized == "shrinkage_lda":
+        return make_pipeline(
+            StandardScaler(),
+            *feature_steps,
+            LinearDiscriminantAnalysis(solver="lsqr", shrinkage="auto"),
+        )
 
     linear_svm = make_pipeline(
         StandardScaler(),
@@ -192,6 +198,13 @@ def make_tuned_decoder(
                 "lineardiscriminantanalysis__shrinkage": ["auto"],
             },
         ]
+    elif normalized == "shrinkage_lda":
+        estimator = make_pipeline(
+            StandardScaler(),
+            *feature_steps,
+            LinearDiscriminantAnalysis(solver="lsqr"),
+        )
+        param_grid = {"lineardiscriminantanalysis__shrinkage": ["auto", 0.1, 0.3, 0.5, 0.7, 0.9]}
     else:
         if emission_mode == "uncalibrated" and scoring == "neg_log_loss":
             raise ValueError("neg_log_loss tuning requires probability estimates; use calibrated emissions for linear_svm.")
@@ -267,6 +280,8 @@ def normalize_decoder_name(name: str) -> str:
         return "linear_svm"
     if normalized in {"l1_logistic", "logistic_l1", "sparse_logreg"}:
         return "sparse_logistic"
+    if normalized in {"lda_shrinkage", "shrinkage_lda", "shrinkagelda"}:
+        return "shrinkage_lda"
     if normalized not in DECODER_CHOICES:
         raise ValueError(f"Unknown decoder '{name}'. Available decoders: {', '.join(DECODER_CHOICES)}.")
     return normalized

@@ -10,7 +10,7 @@ import pandas as pd
 from reptrace.metadata import prepare_binary_metadata
 from reptrace.mne_time_decode import run_time_resolved_decode
 from reptrace.plot_time_decode import plot_time_decode_results
-from reptrace.results import aggregate_time_decode_csvs
+from reptrace.results import aggregate_time_decode_csvs, write_provenance_table
 from reptrace.temporal_smoothing import DEFAULT_EMISSION_SUFFIX, DEFAULT_FIT_WINDOW, smooth_probability_observations
 from reptrace.decoding import (
     DECODER_CHOICES,
@@ -37,6 +37,7 @@ class BenchmarkRun:
     plot_path: Path | None
     calibration_csvs: list[Path]
     observation_csvs: list[Path]
+    provenance_csv: Path | None = None
     skipped_existing: int = 0
     smoothed_observation_csv: Path | None = None
     smoothed_metric_csv: Path | None = None
@@ -200,6 +201,7 @@ def run_benchmark_manifest(
     *,
     out_dir: Path,
     aggregate_out: Path | None = None,
+    provenance_out: Path | None = None,
     plot_out: Path | None = None,
     chance: float | None = None,
     default_label_column: str | None = None,
@@ -383,6 +385,14 @@ def run_benchmark_manifest(
         observation_csv_paths=aggregate_observation_csvs or None,
     )
     aggregate_path: Path | None = aggregate_out
+    if provenance_out is None:
+        provenance_out = out_dir / "provenance.csv"
+    provenance = write_provenance_table(
+        aggregate,
+        aggregate_result_csvs,
+        provenance_out,
+    )
+    provenance_path: Path | None = provenance_out
 
     plot_path: Path | None = None
     if plot_out is not None:
@@ -390,13 +400,14 @@ def run_benchmark_manifest(
             aggregate_out,
             out_path=plot_out,
             chance=chance,
-            title=f"RepTrace benchmark ({int(aggregate['n_subjects'].max())} subject(s))",
+            title=f"RepTrace benchmark ({int(provenance['n_subjects'].max())} subject(s))",
         )
         plot_path = plot_out
 
     return BenchmarkRun(
         result_csvs=result_csvs,
         aggregate_csv=aggregate_path,
+        provenance_csv=provenance_path,
         plot_path=plot_path,
         calibration_csvs=calibration_csvs,
         observation_csvs=observation_csvs,
@@ -413,6 +424,7 @@ def main() -> None:
     parser.add_argument("manifest_csv", type=Path)
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--aggregate-out", type=Path)
+    parser.add_argument("--provenance-out", type=Path)
     parser.add_argument("--plot-out", type=Path)
     parser.add_argument("--chance", type=float)
     parser.add_argument("--label-column")
@@ -456,6 +468,7 @@ def main() -> None:
         args.manifest_csv,
         out_dir=args.out_dir,
         aggregate_out=args.aggregate_out,
+        provenance_out=args.provenance_out,
         plot_out=args.plot_out,
         chance=args.chance,
         default_label_column=args.label_column,
@@ -492,6 +505,8 @@ def main() -> None:
     print(f"Available {len(run.result_csvs)} subject result file(s).")
     if run.aggregate_csv is not None:
         print(f"Wrote aggregate CSV: {run.aggregate_csv}")
+    if run.provenance_csv is not None:
+        print(f"Wrote provenance CSV: {run.provenance_csv}")
     if run.plot_path is not None:
         print(f"Wrote plot: {run.plot_path}")
     if run.calibration_csvs:
