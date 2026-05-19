@@ -72,6 +72,22 @@ def test_make_decoder_fits_pca_inside_probability_pipeline():
     assert probabilities.sum(axis=1).round(6).tolist() == [1.0] * 5
 
 
+def test_elastic_net_logistic_uses_saga_mixed_penalty():
+    rng = np.random.default_rng(13)
+    features = rng.normal(size=(30, 6))
+    labels = np.array([0, 1] * 15)
+
+    model = make_decoder("elasticnet-logistic", max_iter=2000)
+    model.fit(features, labels)
+    probabilities = model.predict_proba(features[:3])
+
+    classifier = model.named_steps["logisticregression"]
+    assert classifier.solver == "saga"
+    assert classifier.l1_ratio == 0.5
+    assert classifier.class_weight == "balanced"
+    assert probabilities.shape == (3, 2)
+
+
 def test_make_decoder_accepts_pca_whiten_alias_and_fractional_components():
     rng = np.random.default_rng(13)
     features = rng.normal(size=(40, 8))
@@ -162,6 +178,25 @@ def test_tuned_shrinkage_lda_selects_shrinkage_strength():
     assert model.predict_proba(features[:3]).shape == (3, 2)
 
 
+def test_tuned_elastic_net_logistic_searches_c_and_l1_ratio():
+    rng = np.random.default_rng(23)
+    features = rng.normal(size=(24, 6))
+    labels = np.array([0, 1] * 12)
+
+    model = make_decoder(
+        "logistic-elastic-net",
+        max_iter=2000,
+        tune_hyperparameters=True,
+        tuning_cv=2,
+        tuning_c_grid=(0.1, 1.0),
+    )
+    model.fit(features, labels)
+
+    assert model.predict_proba(features[:3]).shape == (3, 2)
+    assert model.best_params_["logisticregression__C"] in {0.1, 1.0}
+    assert model.best_params_["logisticregression__l1_ratio"] in {0.15, 0.5, 0.85}
+
+
 def test_parse_c_grid_accepts_comma_separated_values():
     assert parse_c_grid("0.1,1,10") == (0.1, 1.0, 10.0)
 
@@ -188,4 +223,5 @@ def test_score_to_probabilities_handles_binary_scores():
 
 def test_normalize_decoder_name_accepts_svm_alias():
     assert normalize_decoder_name("svm") == "linear_svm"
+    assert normalize_decoder_name("elasticnet-logistic") == "elastic_net_logistic"
     assert normalize_decoder_name("lda-shrinkage") == "shrinkage_lda"

@@ -354,6 +354,8 @@ RepTrace supports standard probability-producing decoders with the `decoder`
 manifest column or `--decoder` CLI option:
 
 - `logistic`: balanced multinomial logistic regression;
+- `elastic_net_logistic`: balanced logistic regression with SAGA elastic-net
+  regularization;
 - `lda`: linear discriminant analysis;
 - `shrinkage_lda`: LDA with LSQR covariance shrinkage estimated inside each
   training fold;
@@ -422,6 +424,24 @@ python -m reptrace.benchmark \
 shrinkage="auto")`. This is still fitted independently in each outer training
 fold, but it regularizes covariance estimates that can be unstable in short
 high-dimensional MEG windows.
+
+Run the elastic-net logistic variant when dense logistic regression may be using
+too many weak noisy features but pure feature selection would be too aggressive:
+
+```bash
+python -m reptrace.benchmark \
+  benchmarks/nod_animate_elastic_net_logistic_all.csv \
+  --out-dir results/nod_animate_elastic_net_logistic_all \
+  --aggregate-out results/nod_animate_elastic_net_logistic_all/summary.csv \
+  --plot-out results/nod_animate_elastic_net_logistic_all/summary.png \
+  --calibration-dir results/nod_animate_elastic_net_logistic_all/calibration \
+  --chance 0.5 \
+  --resume
+```
+
+The untuned manifest uses a fixed 50/50 L1/L2 mix. If
+`tune_hyperparameters=true` is enabled for `elastic_net_logistic`, nested CV
+searches both the C grid and the L1/L2 mixing grid `0.15,0.5,0.85`.
 
 Run the slower tuned temporal train-window ensemble:
 
@@ -561,6 +581,18 @@ gh workflow run nod-decoder-all.yml \
   -f data_root=../data/nod \
   -f manifest_csv=benchmarks/nod_animate_shrinkage_lda_all.csv \
   -f output_dir=results/nod_animate_shrinkage_lda_all \
+  -f n_permutations=10000
+```
+
+Or run the elastic-net logistic manifest:
+
+```bash
+gh workflow run nod-decoder-all.yml \
+  --repo IPS-Stuttgart/RepTrace \
+  --ref main \
+  -f data_root=../data/nod \
+  -f manifest_csv=benchmarks/nod_animate_elastic_net_logistic_all.csv \
+  -f output_dir=results/nod_animate_elastic_net_logistic_all \
   -f n_permutations=10000
 ```
 
